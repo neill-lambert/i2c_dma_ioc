@@ -58,10 +58,11 @@ static void MX_DMA_Init(void);
 static void MX_I2C3_Init(void);
 /* USER CODE BEGIN PFP */
 void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c);
-void DMATransfer ( void ); //unfinished xfer
+void I2CTransfer ( void ); //unfinished xfer
 static void my_I2C3_Init(void);
 static void my_DMA_Init(void);
 static void my_GPIO_Init(void);
+void I2C_Read_1Byte (uint8_t uc_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -93,19 +94,22 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  my_GPIO_Init();
+  my_DMA_Init();
+  my_I2C3_Init();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_DMA_Init();
-  MX_I2C3_Init();
+//  MX_GPIO_Init();
+//  MX_DMA_Init();
+//  MX_I2C3_Init();
   /* USER CODE BEGIN 2 */
   uint8_t value[2];
 
-  HAL_I2C_Mem_Read_DMA(&hi2c3, 0x82, 0x01, 1, &value[0], 1);
+  I2C_Read_1Byte((0x82), 0x00, &value[0], 1);
+//  HAL_I2C_Mem_Read_DMA(&hi2c3, 0x82, 0x01, 1, &value[0], 1);
   HAL_Delay(2);
-  HAL_I2C_Mem_Read_DMA(&hi2c3, 0x82, 0x00, 1, &value[1], 1);
+//  HAL_I2C_Mem_Read_DMA(&hi2c3, 0x82, 0x00, 1, &value[1], 1);
   HAL_Delay(2);
 
   //HAL_I2C_Master_Transmit_DMA(&hi2c3, DevAddress, pData, Size)
@@ -279,6 +283,13 @@ static void my_GPIO_Init(void)
 {
 	//enable clock access to GPIOC and A
 	RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN | RCC_AHB1ENR_GPIOAEN;
+	//enable i2c clock before gpio config..
+	RCC->APB1ENR |= RCC_APB1ENR_I2C3EN;
+	//reset i2c peripheral
+	RCC->APB1RSTR |= RCC_APB1RSTR_I2C3RST;
+	RCC->APB1RSTR &= ~RCC_APB1RSTR_I2C3RST;
+
+
 	//GPIOA8 TO AF
 	GPIOA->MODER |= GPIO_MODER_MODER8_1;
 	//AF INDEX FOR A8 TO I2C3SCL
@@ -288,7 +299,9 @@ static void my_GPIO_Init(void)
 	GPIOA->OSPEEDR |= GPIO_OSPEEDER_OSPEEDR8;
 	//ot8 0x1, O DRAIN
 	GPIOA->OTYPER |= GPIO_OTYPER_OT8;
-
+	//PIN A8 PULL UP? 01 = PULL UP
+	GPIOA->PUPDR |= GPIO_PUPDR_PUPDR8_0;
+	GPIOA->PUPDR &= ~GPIO_PUPDR_PUPDR8_1;
 	//GPIOC9 TO AF
 	GPIOC->MODER |= GPIO_MODER_MODER9_1;
 	//AF INDEX FOR C9 TO I2C3SDA
@@ -298,6 +311,10 @@ static void my_GPIO_Init(void)
 	GPIOC->OSPEEDR |= GPIO_OSPEEDER_OSPEEDR9;
 	//otype9 0x1, O DRAIN
 	GPIOC->OTYPER |= GPIO_OTYPER_OT9;
+	//PIN C9 PULL UP?
+	//PIN A8 PULL UP? 01 = PULL UP
+	GPIOC->PUPDR |= GPIO_PUPDR_PUPDR9_0;
+	GPIOC->PUPDR &= ~GPIO_PUPDR_PUPDR9_1;
 }
 
 
@@ -311,6 +328,17 @@ static void my_DMA_Init(void)
 {
 	//enable clock access dma1
 	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
+
+	//clear all interrupts to ensure no misfiring when enabling
+	DMA1->LIFCR |= DMA_LIFCR_CTCIF2;
+
+	DMA1->LIFCR |= DMA_LIFCR_CHTIF2;
+
+	DMA1->LIFCR |= DMA_LIFCR_CTEIF2;
+
+	DMA1->LIFCR |= DMA_LIFCR_CDMEIF2;
+
+	DMA1->LIFCR |= DMA_LIFCR_CFEIF2;
 
 	DMA1_Stream2->CR &= ~(DMA_SxCR_CHSEL |
 							DMA_SxCR_PL |
@@ -373,15 +401,26 @@ static void my_DMA_Init(void)
   */
 static void my_I2C3_Init(void)
 {
-	I2C3->CR2 |= I2C_CR2_FREQ_2;
+	I2C3->CR1	&= ~I2C_CR1_PE;
+	//wait til disabled
+	while(I2C3->CR1 & I2C_CR1_PE);
 
+	//sw reset after all i2c gpio config. cr1bit15, to 1 and then back to 0.
+	I2C3->CR1 |= I2C_CR1_SWRST;
+	I2C3->CR1 &= ~I2C_CR1_SWRST;
+
+	I2C3->CR2 |= I2C_CR2_ITERREN;
+	I2C3->CR2 |= I2C_CR2_ITEVTEN;
+
+	I2C3->CR2 |= I2C_CR2_FREQ_2;
 	I2C3->CCR |= 0x14;
 	I2C3->TRISE |= 0x5;
-	//??
-	I2C3->CR2 |= I2C_CR2_ITERREN;
 
-	// i2cev irqn enable??
-	// i2cerr irqn enable??
+	I2C3->CR2 |= I2C_CR2_DMAEN;
+
+	I2C3->CR1 |= I2C_CR1_PE;	//i2c start
+	I2C3->CR1 |= (1<<9);  // Stop condition I2C
+
 }
 
 /***************************/
@@ -390,27 +429,169 @@ static void my_I2C3_Init(void)
   * @param None
   * @retval None
   */
-void DMATransfer ( void )
+void I2CTransfer ( void )
 {
 	//not finished
-	//clear all interrupts to ensure no misfiring when enabling
-	DMA1->LIFCR |= DMA_LIFCR_CTCIF2;
-
-	DMA1->LIFCR |= DMA_LIFCR_CHTIF2;
-
-	DMA1->LIFCR |= DMA_LIFCR_CTEIF2;
-
-	DMA1->LIFCR |= DMA_LIFCR_CDMEIF2;
-
-	DMA1->LIFCR |= DMA_LIFCR_CFEIF2;
-
-	// function needs pointers. pInputDataArray, Register#to probe, and i2c3_dr.
-	// a bit like dma transfer func. set source and destination, and size of xfer. whatever. whatever
-
-	I2C3->CR2 |= I2C_CR2_DMAEN;
-
-	I2C3->CR1 |= I2C_CR1_PE;
+//
+//	// function needs pointers. pInputDataArray, Register#to probe, and i2c3_dr.
+//	// a bit like dma transfer func. set source and destination, and size of xfer. whatever. whatever
+//
+//	/*************************************/
+//	//I2C START
+//	I2C3->CR1 |= I2C_CR1_ACK;
+//	I2C3->CR1 |= I2C_CR1_START;
+//
+//	//I2C WRITE
+//	while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
+//	I2C3->DR = 0x0; //0xO IS REG VALUE?? TO WRITE INTO THE I2C DR
+//	while (!(I2C3->SR1 & (1<<2)));  // wait for BTF bit to set
+//
+//	//I2C SEND ADDRESS
+//	I2C3->DR = 0x82;  //  send the address
+//	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+//	uint8_t temp = I2C3->SR1 | I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
+//	//READ ACK HERE TO SEE IF SLAVE HAS SENT IT
+//
+//	//I2C READ
+//	int remaining = size;
+//
+//	/**** STEP 1 ****/
+//		if (size == 1)
+//		{
+//			/**** STEP 1-a ****/
+//			I2C3->DR = 0X82;  //  send the address
+//			while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+//
+//			/**** STEP 1-b ****/
+//			I2C3->CR1 &= ~(1<<10);  // clear the ACK bit
+//			uint8_t temp = I2C3->SR1 | I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit.... EV6 condition
+//			I2C3->CR1 |= (1<<9);  // Stop I2C
+//
+//			/**** STEP 1-c ****/
+//			while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
+//
+//			/**** STEP 1-d ****/
+//			buffer[size-remaining] = I2C3->DR;  // Read the data from the DATA REGISTER
+//
+//		}
+//
+//	/**** STEP 2 ****/
+//		else
+//		{
+//			/**** STEP 2-a ****/
+//			I2C3->DR = Address;  //  send the address
+//			while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+//
+//			/**** STEP 2-b ****/
+//			uint8_t temp = I2C3->SR1 | I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
+//
+//			while (remaining>2)
+//			{
+//				/**** STEP 2-c ****/
+//				while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
+//
+//				/**** STEP 2-d ****/
+//				buffer[size-remaining] = I2C3->DR;  // copy the data into the buffer
+//
+//				/**** STEP 2-e ****/
+//				I2C3->CR1 |= 1<<10;  // Set the ACK bit to Acknowledge the data received
+//
+//				remaining--;
+//			}
+//
+//			// Read the SECOND LAST BYTE
+//			while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
+//			buffer[size-remaining] = I2C3->DR;
+//
+//			/**** STEP 2-f ****/
+//			I2C3->CR1 &= ~(1<<10);  // clear the ACK bit
+//
+//			/**** STEP 2-g ****/
+//			I2C3->CR1 |= (1<<9);  // Stop I2C
+//
+//			remaining--;
+//
+//			// Read the Last BYTE
+//			while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
+//			buffer[size-remaining] = I2C3->DR;  // copy the data into the buffer
+//		}
 }
+
+void I2C_Read_1Byte (uint8_t uc_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size)
+{
+	int remaining = size;
+	//I2C START
+	I2C3->CR1 |= I2C_CR1_ACK;
+	I2C3->CR1 |= I2C_CR1_START;
+
+	//I2C SEND ADDRESS
+	I2C3->DR = (uc_Address<<1);  //  send the address
+	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+	uint8_t temp = I2C3->SR1 | I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
+	//READ ACK HERE TO SEE IF SLAVE HAS SENT IT
+
+	//I2C WRITE
+	while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
+	I2C3->DR = uc_Reg_Address; //0xO IS REG VALUE TO WRITE INTO THE I2C DR
+	while (!(I2C3->SR1 & (1<<2)));  // wait for BTF bit to set
+
+	//I2C START
+	I2C3->CR1 |= I2C_CR1_ACK;
+	I2C3->CR1 |= I2C_CR1_START;
+
+	/**** STEP 1-a ****/
+	I2C3->DR = uc_Address;  //  send the address
+	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+
+	/**** STEP 1-b ****/
+	I2C3->CR1 &= ~(1<<10);  // clear the ACK bit
+	temp = I2C3->SR1 | I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit.... EV6 condition
+	I2C3->CR1 |= (1<<9);  // Stop I2C
+
+	/**** STEP 1-c ****/
+	while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
+
+	/**** STEP 1-d ****/
+	uc_pReadBuffer = I2C3->DR;  // Read the data from the DATA RE
+
+
+}
+
+//void MPU_Write (uint8_t Address, uint8_t Reg, uint8_t Data)
+//{
+//	/**** STEPS FOLLOWED  ************
+//	1. START the I2C
+//	2. Send the ADDRESS of the Device
+//	3. Send the ADDRESS of the Register, where you want to write the data to
+//	4. Send the DATA
+//	5. STOP the I2C
+//	*/
+//	I2C_Start ();
+//	I2C_Address (Address);
+//	I2C_Write (Reg);
+//	I2C_Write (Data);
+//	I2C_Stop ();
+//}
+//
+//void MPU_Read (uint8_t Address, uint8_t Reg, uint8_t *buffer, uint8_t size)
+//{
+//	/**** STEPS FOLLOWED  ************
+//	1. START the I2C
+//	2. Send the ADDRESS of the Device
+//	3. Send the ADDRESS of the Register, where you want to READ the data from
+//	4. Send the RESTART condition
+//	5. Send the Address (READ) of the device
+//	6. Read the data
+//	7. STOP the I2C
+//	*/
+//	I2C_Start ();
+//	I2C_Address (Address);
+//	I2C_Write (Reg);
+//	I2C_Start ();  // repeated start
+//	I2C_Read (Address+0x01, buffer, size);
+//	I2C_Stop ();
+//}
+
 
 /* USER CODE END 4 */
 
