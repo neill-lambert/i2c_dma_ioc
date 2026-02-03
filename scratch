@@ -1,0 +1,23 @@
+ryo_i2c_dma_mem_write
+
+arguments.. i2c handle, devaddr, memaddr, memsize, pdata, sizedata
+
+wait for halbusy flag reset, hal lock, I2C_CR1_PE enable,
+I2C_CR1_POS disable, HAL_DMA_Start_IT, 
+
+	RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+
+
+	//and also set nvic priority, and enable irq
+
+	/*************>>>>>>> STEPS FOLLOWED <<<<<<<<************ ???
+
+	1. Enable the SYSCFG/AFIO bit in RCC register
+	2. Configure the EXTI configuration Register in the SYSCFG/AFIO
+	3. Disable the EXTI Mask using Interrupt Mask Register (IMR)
+	4. Configure the Rising Edge / Falling Edge Trigger
+	5. Set the Interrupt Priority
+	6. Enable the interrupt
+
+	*/
+	
