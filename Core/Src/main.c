@@ -62,8 +62,11 @@ void I2CTransfer ( void ); //unfinished xfer
 static void my_I2C3_Init(void);
 static void my_DMA_Init(void);
 static void my_GPIO_Init(void);
-void I2C_Read_1Byte (uint8_t uc_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size);
-void DMA_I2C_Read_Rx(uint8_t* pBuffer, uint8_t sizeTransfer);
+void I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer);
+void I2C_Write_Via_DMA(uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pWriteBuffer, uint8_t size);
+void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size);
+static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeTransfer);
+static void DMA_Transmit(const uint8_t * pBuffer, uint8_t size);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -101,21 +104,13 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-//  MX_GPIO_Init();
-//  MX_DMA_Init();
-//  MX_I2C3_Init();
+
   /* USER CODE BEGIN 2 */
   uint8_t value[2];
 
-  I2C_Read_1Byte(0x82, 0x01, &value[0], 1);
-//  HAL_I2C_Mem_Read_DMA(&hi2c3, 0x82, 0x01, 1, &value[0], 1);
-  HAL_Delay(2);
-//  HAL_I2C_Mem_Read_DMA(&hi2c3, 0x82, 0x00, 1, &value[1], 1);
+  I2C_Read_1Byte(0x82, 0x01, &value[0]);
   HAL_Delay(2);
 
-  //HAL_I2C_Master_Transmit_DMA(&hi2c3, DevAddress, pData, Size)
-  // Add callback or wait for transfer complete
-  uint16_t stmpe811_id = (value[0] | value[1] << 8);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -357,7 +352,7 @@ static void my_DMA_Init(void)
 							DMA_SxCR_DIR |
 							DMA_SxCR_EN);
 	//wait til disabled
-	while(DMA1_Stream2->CR & DMA_SxCR_EN);
+	while(DMA1_Stream2->CR & DMA_SxCR_EN); //rx
 
 	//SELECT CH3 0x3, 0b011.
 	DMA1_Stream2->CR |= DMA_SxCR_CHSEL_0 | DMA_SxCR_CHSEL_1;
@@ -377,7 +372,7 @@ static void my_DMA_Init(void)
 							DMA_SxCR_DIR |
 							DMA_SxCR_EN);
 	//wait til disabled
-	while(DMA1_Stream4->CR & DMA_SxCR_EN);
+	while(DMA1_Stream4->CR & DMA_SxCR_EN);	//tx
 	//SELECT CH3 0x3, 0b011.
 	DMA1_Stream4->CR |= DMA_SxCR_CHSEL_0 | DMA_SxCR_CHSEL_1;
 	//MEM INCR
@@ -395,8 +390,8 @@ static void my_DMA_Init(void)
 	NVIC_EnableIRQ(DMA1_Stream4_IRQn);
 
 	//ENABLE
-	DMA1_Stream2->CR |= DMA_SxCR_EN;
-	DMA1_Stream4->CR |= DMA_SxCR_EN;
+	DMA1_Stream2->CR |= DMA_SxCR_EN; //rx
+	DMA1_Stream4->CR |= DMA_SxCR_EN; //tx
 }
 
 
@@ -438,9 +433,8 @@ static void my_I2C3_Init(void)
   * @param chip address, register address, read buffer, size of read
   * @retval None
   */
-void I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size)
+void I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer)
 {
-	int remaining = size;
 	//I2C START
 	I2C3->CR1 |= I2C_CR1_ACK;
 	I2C3->CR1 |= I2C_CR1_START;
@@ -475,12 +469,175 @@ void I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc
 	while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
 
 	/**** STEP 1-d ****/
-	uc_pReadBuffer = I2C3->DR;  // Read the data from the DATA RE
-
-
+	uc_pReadBuffer = I2C3->DR;  // Read the data from the DATA REG
 }
 
-void DMA_I2C_Read_Rx(uint8_t* pBuffer, uint8_t sizeTransfer)
+
+
+void I2C_Write_Via_DMA(uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pWriteBuffer, uint8_t size)
+{
+	/* how embeddedexpert does it.. https://blog.embeddedexpert.io/?p=624
+	Wait until the bus is free
+	while(I2C1->SR2&I2C_SR2_BUSY){;}
+	Generate START
+	I2C1->CR1 |= I2C_CR1_START;
+	Wait SB flag is set
+	while(!(I2C1->SR1&I2C_SR1_SB)){;}
+	Read SR1
+	(void)I2C1->SR1;
+	Send slave address with write
+	I2C1->DR = (SensorAddr<<1);
+	Wait ADDR flag is set
+	while(((I2C1->SR1)&I2C_SR1_ADDR)==0){;}
+	Start DMA
+	DMA_Transmit(pWriteBuffer, NumByteToWrite);
+	Read SR1
+	(void)I2C1->SR1;
+	Read SR2
+	(void)I2C1->SR2;*/
+
+	//AND ME...
+	//I2C START
+	I2C3->CR1 |= I2C_CR1_ACK;
+	I2C3->CR1 |= I2C_CR1_START;
+	while (!(I2C3->SR1 & I2C_SR1_SB));
+	//I2C SEND ADDRESS
+	I2C3->DR = (uc_Dev_Address);  //  send the device address
+	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+	uint8_t temp = I2C3->SR1 | I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
+	//READ ACK HERE TO SEE IF SLAVE HAS SENT IT
+
+	//I2C WRITE
+	while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
+	I2C3->DR = uc_Reg_Address; //0xO IS REG VALUE TO WRITE INTO THE I2C DR
+	while (!(I2C3->SR1 & (1<<2)));  // wait for BTF bit to set
+
+	//I2C START
+	I2C3->CR1 |= I2C_CR1_ACK;
+	I2C3->CR1 |= I2C_CR1_START;
+	while (!(I2C3->SR1 & I2C_SR1_SB));
+
+	/**** STEP 1-a ****/
+	temp = I2C3->DR; //dummy read?
+	I2C3->DR = (uc_Dev_Address+0x01);  //  send the device address+0x01, during the Read function. Basically we need to set the R/W bit (Bit 0) HIGH during the Read operation. This is common for all the devices that you will use for the I2C.
+	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+
+	//dma write function in here...
+	DMA_Transmit(uc_pWriteBuffer, size);
+	/**** STEP 1-b ****/
+	I2C3->CR1 &= ~(1<<10);  // clear the ACK bit
+	temp = I2C3->SR1 | I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
+	I2C3->CR1 |= (1<<9);  // Stop I2C
+
+	/**** STEP 1-c ****/
+	while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
+
+	/**** STEP 1-d ****/
+	uint8_t uc_readBuffer = I2C3->DR;  // Read the data from the DATA REG
+}
+
+
+static void DMA_Transmit(const uint8_t * pBuffer, uint8_t size)
+{
+	  /* Check null pointers */
+	  if(NULL != pBuffer)
+	  {
+	    DMA1_Stream4->CR&=~DMA_SxCR_EN;
+		while((DMA1_Stream4->CR)&DMA_SxCR_EN){;}
+
+	    /* Set memory address */
+	    DMA1_Stream4->M0AR = (uint32_t)pBuffer;
+			DMA1_Stream4->PAR=(uint32_t)&I2C1->DR;
+	    /* Set number of data items */
+	    DMA1_Stream4->NDTR = size;
+
+	    /* Clear all interrupt flags */
+		DMA1->LIFCR |= DMA_LIFCR_CTCIF2;
+
+		DMA1->LIFCR |= DMA_LIFCR_CHTIF2;
+
+		DMA1->LIFCR |= DMA_LIFCR_CTEIF2;
+
+		DMA1->LIFCR |= DMA_LIFCR_CDMEIF2;
+
+		DMA1->LIFCR |= DMA_LIFCR_CFEIF2;
+
+	    /* Enable DMA1_Stream4 */
+	    DMA1_Stream4->CR |= DMA_SxCR_EN;
+	  }
+	  else
+	  {
+	    /* Null pointers, do nothing */
+	  }
+}
+
+void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size)
+{
+	//embedded expert...
+	/*wait until the bus is free
+	while(I2C1->SR2&I2C_SR2_BUSY){;}
+	Generate START
+	I2C1->CR1 |= I2C_CR1_START;
+	Wait SB flag is set
+	while(!(I2C1->SR1&I2C_SR1_SB)){;}
+	Read SR1
+	(void)I2C1->SR1;
+	Send slave address with write
+	I2C1->DR=(SensorAddr<<1|0);
+	Wait ADDR flag is set
+	while(((I2C1->SR1)&I2C_SR1_ADDR)==0){;}
+	Read SR1
+	(void)I2C1->SR1;
+	Read SR2
+	(void)I2C1->SR2;
+	Wait TXE flag is set
+	while(I2C_SR1_TXE != (I2C_SR1_TXE & I2C1->SR1))
+	{
+		Do nothing
+	}
+	if(2 <= NumByteToRead)
+	{
+		Acknowledge enable
+		I2C1->CR1 |= I2C_CR1_ACK;
+		Send register address to read with increment
+		I2C1->DR =  (ReadAddr);
+	}
+	else
+	{
+		Acknowledge disable
+		I2C1->CR1 &= ~I2C_CR1_ACK;
+		Send register address to read (single)
+		I2C1->DR =  ReadAddr;
+	}
+	Wait BTF flag is set
+	while(!(I2C_SR1_BTF & I2C1->SR1))
+	{
+		Do nothing
+	}
+	Generate ReSTART
+	I2C1->CR1 |= I2C_CR1_START;
+
+	Wait SB flag is set
+	while(I2C_SR1_SB != (I2C_SR1_SB & I2C1->SR1))
+	{
+		Do nothing
+	}
+	Read SR1
+	(void)I2C1->SR1;
+	Send slave address with read
+	I2C1->DR =  (SensorAddr<<1 | (uint8_t)0x01);
+	Wait ADDR flag is set
+	while(((I2C1->SR1)&I2C_SR1_ADDR)==0){;}
+	Start DMA
+	DMA_Receive(pReadBuffer, NumByteToRead);
+	Read SR1
+	(void)I2C1->SR1;
+	Read SR2
+	(void)I2C1->SR2;
+	*/
+
+}
+static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeTransfer)
 {
 	//i2c configuration..
 	// 1. Ensure the stream is disabled before configuring
