@@ -65,7 +65,7 @@ static void my_GPIO_Init(void);
 void I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer);
 void I2C_Write_Via_DMA(uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pWriteBuffer, uint8_t size);
 void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size);
-static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeTransfer);
+static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive);
 static void DMA_Transmit(const uint8_t * pBuffer, uint8_t size);
 /* USER CODE END PFP */
 
@@ -497,6 +497,8 @@ void I2C_Write_Via_DMA(uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	(void)I2C1->SR2;*/
 
 	//AND ME...
+	//wait until the bus is free
+	while(I2C3->SR2&I2C_SR2_BUSY){;}
 	//I2C START
 	I2C3->CR1 |= I2C_CR1_ACK;
 	I2C3->CR1 |= I2C_CR1_START;
@@ -504,7 +506,9 @@ void I2C_Write_Via_DMA(uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	//I2C SEND ADDRESS
 	I2C3->DR = (uc_Dev_Address);  //  send the device address
 	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
-	uint8_t temp = I2C3->SR1 | I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
+	// read SR1 and SR2 to clear the ADDR bit
+	(void) I2C3->SR1;
+	(void) I2C3->SR2;
 	//READ ACK HERE TO SEE IF SLAVE HAS SENT IT
 
 	//I2C WRITE
@@ -518,15 +522,17 @@ void I2C_Write_Via_DMA(uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	while (!(I2C3->SR1 & I2C_SR1_SB));
 
 	/**** STEP 1-a ****/
-	temp = I2C3->DR; //dummy read?
-	I2C3->DR = (uc_Dev_Address+0x01);  //  send the device address+0x01, during the Read function. Basically we need to set the R/W bit (Bit 0) HIGH during the Read operation. This is common for all the devices that you will use for the I2C.
+	(void) I2C3->DR; //dummy read?
+	I2C3->DR = (uc_Dev_Address<<1);  //  send the device address with write bit.
 	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
 
 	//dma write function in here...
 	DMA_Transmit(uc_pWriteBuffer, size);
 	/**** STEP 1-b ****/
 	I2C3->CR1 &= ~(1<<10);  // clear the ACK bit
-	temp = I2C3->SR1 | I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
+	 // read SR1 and SR2 to clear the ADDR bit
+	(void) I2C3->SR1;
+	(void) I2C3->SR2;
 	I2C3->CR1 |= (1<<9);  // Stop I2C
 
 	/**** STEP 1-c ****/
@@ -635,24 +641,86 @@ void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	Read SR2
 	(void)I2C1->SR2;
 	*/
+	//wait for bus to be free
+	while(I2C3->SR2&I2C_SR2_BUSY){;}
+	//I2C START
+	I2C3->CR1 |= I2C_CR1_ACK;
+	I2C3->CR1 |= I2C_CR1_START;
+	while (!(I2C3->SR1 & I2C_SR1_SB));
+	//I2C SEND ADDRESS
+	I2C3->DR = (uc_Dev_Address << 1);  //  send the device address with write
+	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+	(void) I2C3->SR1;
+	(void) I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
+	//READ ACK HERE TO SEE IF SLAVE HAS SENT IT
+
+	//I2C WRITE
+	while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
+	if (size >= 2)
+	{
+		I2C3->CR1 |= I2C_CR1_ACK; // ack enable
+		I2C3->DR = (uc_Reg_Address);
+	}
+	else
+	{
+		I2C3->CR1 &= ~I2C_CR1_ACK; // ack disable
+		I2C1->DR =  uc_Reg_Address;
+
+	}
+	while (!(I2C3->SR1 & (1<<2)));  // wait for BTF bit to set
+
+	//I2C START
+	I2C3->CR1 |= I2C_CR1_ACK;
+	I2C3->CR1 |= I2C_CR1_START;
+	while (!(I2C3->SR1 & I2C_SR1_SB));
+
+	//read sr1
+	(void) I2C3->SR1;
+	//send slave address with read
+	I2C3->DR = (uc_Dev_Address << 1 | (uint8_t) 0x01);
+	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+	//start DMA
+	DMA_Receive(uc_pReadBuffer, size);
+
+	//read sr1 and sr2
+	(void) I2C3->SR1;
+	(void) I2C3->SR2;
 
 }
-static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeTransfer)
+
+static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive)
 {
-	//i2c configuration..
-	// 1. Ensure the stream is disabled before configuring
-	DMA1_Stream0->CR &= ~DMA_SxCR_EN;
-	while(DMA1_Stream0->CR & DMA_SxCR_EN);
+	if (pBuffer != NULL)
+	{
+		//i2c configuration..
+		// 1. Ensure the stream is disabled before configuring
+		DMA1_Stream0->CR &= ~DMA_SxCR_EN;
+		while(DMA1_Stream0->CR & DMA_SxCR_EN);
 
-	//set periph address, i2c dr.
-	DMA1_Stream2->PAR = (uint32_t)&(I2C3->DR);
-	//set memory address, pBuffer
-	DMA1_Stream2->M0AR = *pBuffer;
-	//size of xfer
-	DMA1_Stream2->NDTR = sizeTransfer;
+		//set periph address, i2c dr.
+		DMA1_Stream2->PAR = (uint32_t)&(I2C3->DR);
+		//set memory address, pBuffer
+		DMA1_Stream2->M0AR = *pBuffer;
+		//size of xfer
+		DMA1_Stream2->NDTR = sizeReceive;
+		//clear all interrupts
+		DMA1->LIFCR |= DMA_LIFCR_CTCIF2;
 
-	DMA1_Stream0->CR |= DMA_SxCR_EN;
+		DMA1->LIFCR |= DMA_LIFCR_CHTIF2;
 
+		DMA1->LIFCR |= DMA_LIFCR_CTEIF2;
+
+		DMA1->LIFCR |= DMA_LIFCR_CDMEIF2;
+
+		DMA1->LIFCR |= DMA_LIFCR_CFEIF2;
+
+		//enable dma
+		DMA1_Stream0->CR |= DMA_SxCR_EN;
+	}
+	else
+	{
+		//do nothing
+	}
 }
 
 
