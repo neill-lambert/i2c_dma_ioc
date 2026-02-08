@@ -67,6 +67,7 @@ void I2C_Write_Via_DMA(uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size);
 static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive);
 static void DMA_Transmit(const uint8_t * pBuffer, uint8_t size);
+void ReleaseSerialBus( void );
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -98,17 +99,21 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
+  ReleaseSerialBus();
   my_GPIO_Init();
-  //my_DMA_Init();
+  my_DMA_Init();
   my_I2C3_Init();
+
+
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
 
   /* USER CODE BEGIN 2 */
-  uint8_t value[2];
-
-  I2C_Read_1Byte(0x82, 0x01, &value[0]);
+  uint8_t value;
+  uint8_t* pValue = &value;
+  I2C_Read_Via_DMA(0x82, 0x01, pValue, 1);
+  I2C_Read_1Byte(0x82, 0x01, pValue);
   HAL_Delay(2);
 
   /* USER CODE END 2 */
@@ -282,11 +287,11 @@ static void my_GPIO_Init(void)
 	// 1. Enable i2c3 Clock
 	RCC->APB1ENR |= RCC_APB1ENR_I2C3EN;
 
-//	// 2. Force I2C Reset
-//	I2C3->CR1 |= I2C_CR1_SWRST;
-//	for(int i = 0; i < 1000; i++); // Small delay
-//	I2C3->CR1 &= ~I2C_CR1_SWRST;
-//	for(int i = 0; i < 1000; i++); // Small delay
+	// 2. Force I2C Reset
+	I2C3->CR1 |= I2C_CR1_SWRST;
+	for(int i = 0; i < 1000; i++); // Small delay
+	I2C3->CR1 &= ~I2C_CR1_SWRST;
+	for(int i = 0; i < 1000; i++); // Small delay
 
 	//reset i2c peripheral
 	//RCC->APB1RSTR |= RCC_APB1RSTR_I2C3RST;
@@ -295,6 +300,8 @@ static void my_GPIO_Init(void)
 
 	//GPIOA8 TO AF
 	GPIOA->MODER |= GPIO_MODER_MODER8_1;
+	GPIOA->MODER &= ~GPIO_MODER_MODER8_0;
+
 	//AF INDEX FOR A8 TO I2C3SCL
 	// AFRH AF4, 0b100, 0x4.
 	GPIOA->AFR[1] |= GPIO_AFRH_AFRH0_2;
@@ -307,6 +314,7 @@ static void my_GPIO_Init(void)
 	//GPIOA->PUPDR &= ~GPIO_PUPDR_PUPDR8_1;
 	//GPIOC9 TO AF
 	GPIOC->MODER |= GPIO_MODER_MODER9_1;
+	GPIOC->MODER &= ~GPIO_MODER_MODER9_0;
 	//AF INDEX FOR C9 TO I2C3SDA
 	// AFRH AF4, 0b100, 0x4.
 	GPIOC->AFR[1] |= GPIO_AFRH_AFRH1_2;
@@ -404,6 +412,10 @@ static void my_DMA_Init(void)
   */
 static void my_I2C3_Init(void)
 {
+//	//SWRST
+//	I2C3->CR1 |= (1<<15);
+//	while (I2C3->SR1 & I2C_SR1_SB);
+//	I2C3->CR1 &= ~(1<<15);
 
 	I2C3->CR1	&= ~I2C_CR1_PE;
 	//wait til disabled
@@ -420,10 +432,9 @@ static void my_I2C3_Init(void)
 	I2C3->CCR |= 0x50;
 	I2C3->TRISE |= 0x11;
 
-	//I2C3->CR2 |= I2C_CR2_DMAEN;
+	I2C3->CR2 |= I2C_CR2_DMAEN;
 
 	I2C3->CR1 |= I2C_CR1_PE;	//i2c start
-
 }
 
 
@@ -469,7 +480,7 @@ void I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc
 	while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
 
 	/**** STEP 1-d ****/
-	uc_pReadBuffer = I2C3->DR;  // Read the data from the DATA REG
+	*uc_pReadBuffer = I2C3->DR;  // Read the data from the DATA REG
 }
 
 
@@ -523,7 +534,7 @@ void I2C_Write_Via_DMA(uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 
 	/**** STEP 1-a ****/
 	(void) I2C3->DR; //dummy read?
-	I2C3->DR = (uc_Dev_Address<<1);  //  send the device address with write bit.
+	I2C3->DR = (uc_Dev_Address);  //  send the device address with write bit.
 	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
 
 	//dma write function in here...
@@ -642,13 +653,13 @@ void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	(void)I2C1->SR2;
 	*/
 	//wait for bus to be free
-	while(I2C3->SR2&I2C_SR2_BUSY){;}
+	//while(I2C3->SR2&I2C_SR2_BUSY){;}
 	//I2C START
 	I2C3->CR1 |= I2C_CR1_ACK;
 	I2C3->CR1 |= I2C_CR1_START;
 	while (!(I2C3->SR1 & I2C_SR1_SB));
 	//I2C SEND ADDRESS
-	I2C3->DR = (uc_Dev_Address << 1);  //  send the device address with write
+	I2C3->DR = (uc_Dev_Address);  //  send the device address with write
 	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
 	(void) I2C3->SR1;
 	(void) I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
@@ -659,15 +670,16 @@ void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	if (size >= 2)
 	{
 		I2C3->CR1 |= I2C_CR1_ACK; // ack enable
-		I2C3->DR = (uc_Reg_Address);
+		I2C3->DR = uc_Reg_Address;
 	}
 	else
 	{
 		I2C3->CR1 &= ~I2C_CR1_ACK; // ack disable
-		I2C1->DR =  uc_Reg_Address;
-
+		I2C3->DR = uc_Reg_Address;
 	}
+
 	while (!(I2C3->SR1 & (1<<2)));  // wait for BTF bit to set
+	//the btf doesnt fire, notably txe is set...
 
 	//I2C START
 	I2C3->CR1 |= I2C_CR1_ACK;
@@ -677,7 +689,7 @@ void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	//read sr1
 	(void) I2C3->SR1;
 	//send slave address with read
-	I2C3->DR = (uc_Dev_Address << 1 | (uint8_t) 0x01);
+	I2C3->DR = (uc_Dev_Address| (uint8_t) 0x01);
 	while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
 	//start DMA
 	DMA_Receive(uc_pReadBuffer, size);
@@ -723,6 +735,82 @@ static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive)
 	}
 }
 
+void ReleaseSerialBus( void )
+{
+	/*	To release a busy I2C bus, the master should perform the following steps, usually by reconfiguring the I2C pins as GPIOs:
+	    Configure SCL/SDA as GPIO: Switch the SCL and SDA pins from "I2C peripheral mode" to "GPIO output mode".
+	    Toggle SCL (9 to 16 times): Toggle the SCL line high and low 9 to 16 times. This forces the malfunctioning slave device to complete its current byte transmission (8 bits + 1 ACK/NACK) and release the SDA line.
+	    Generate a STOP Condition: After toggling SCL and ensuring SDA is high, issue a proper I2C STOP condition (pull SDA low, then SCL high, then SDA high) to completely reset the bus state machine.
+	    Re-initialize I2C: Reconfigure the pins back to "I2C peripheral mode".  */
+//	RCC->APB1RSTR |= RCC_APB1RSTR_I2C3RST;
+//	HAL_Delay(10);
+//	RCC->APB1RSTR &= ~RCC_APB1RSTR_I2C3RST;
+//
+//	I2C3->CR1 &= ~I2C_CR1_PE;	//TURN PE OFF
+//
+//	//SWITCH SDA TO HIGH IMPEDANCE.. INPUT
+//	GPIOC->MODER &= ~GPIO_MODER_MODER9_1;
+//	GPIOC->MODER &= ~GPIO_MODER_MODER9_0;
+//
+//	//sclk to op mode oopen drain
+//	GPIOA->MODER |= GPIO_MODER_MODER8_0;
+//	GPIOA->MODER &= ~GPIO_MODER_MODER8_1;
+//
+//	//sclk to open drain
+//	GPIOA->OTYPER |= GPIO_OTYPER_OT8;
+//
+//
+//	//toggle sclk 8-16 times, then issue a stop condition
+//	//a8 = i2c3 sclk
+//
+//	for (int i=0; i< 16; i++)
+//	{
+//		GPIOA->BSRR = (1<<8);
+//		HAL_Delay(10);
+//		GPIOA->BSRR = (1<<(8+16));
+//		HAL_Delay(10);
+//	}
+//	//then after checking generate stop condition.
+//	I2C3->CR1 |= I2C_CR1_STOP;
+
+
+	//GPIOA->MODER |= GPIO_MODER_MODER8_1;
+	//GPIOA->MODER &= ~GPIO_MODER_MODER8_0;
+	//reinit i2c after calling this function
+
+//	3. Complete Reset Sequence
+//	If the above fails, perform a full reset sequence:
+//
+//	    Disable I2C.
+//	    Set SCL and SDA as GPIO Output Open-Drain, High Level.
+//	    Verify lines are high (GPIOx_IDR).
+//	    Toggle SDA low then high, then SCL low then high to release devices.
+//	    Reset I2C using SWRST.
+    CLEAR_BIT(I2C3->CR1, I2C_CR1_PE);
+	//sclk to op mode open drain
+	GPIOA->MODER |= GPIO_MODER_MODER8_0;
+	GPIOA->MODER &= ~GPIO_MODER_MODER8_1;
+	//sclk to open drain
+	GPIOA->OTYPER |= GPIO_OTYPER_OT8;
+	//and high speed
+	GPIOA->OSPEEDR |= GPIO_OSPEEDER_OSPEEDR8_0 | GPIO_OSPEEDER_OSPEEDR8_1;
+	while(GPIOA->IDR & GPIO_IDR_ID0 != 0){;}
+	//toggle sda low then high
+	GPIOC->BSRR = (1<<9);
+	HAL_Delay(10);
+	GPIOC->BSRR = (1<<(9+16));
+	HAL_Delay(10);
+	//and sclk low then high
+	GPIOA->BSRR = (1<<8);
+	HAL_Delay(10);
+	GPIOA->BSRR = (1<<(8+16));
+	HAL_Delay(10);
+	//SWRST
+	I2C3->CR1 |= (1<<15);
+	while (I2C3->SR1 & I2C_SR1_SB);
+	I2C3->CR1 &= ~(1<<15);
+
+}
 
 /* USER CODE END 4 */
 
