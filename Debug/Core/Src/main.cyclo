@@ -12,7 +12,7 @@
 ../Core/Src/main.c:457:6:I2C_Read_1Byte	8
 ../Core/Src/main.c:498:6:I2C_Write_Via_DMA	9
 ../Core/Src/main.c:567:13:DMA_Transmit	3
-../Core/Src/main.c:601:6:I2C_Read_Via_DMA	8
-../Core/Src/main.c:713:13:DMA_Receive	3
-../Core/Src/main.c:748:6:ReleaseSerialBus	8
-../Core/Src/main.c:861:6:Error_Handler	1
+../Core/Src/main.c:602:6:I2C_Read_Via_DMA	8
+../Core/Src/main.c:714:13:DMA_Receive	3
+../Core/Src/main.c:749:6:ReleaseSerialBus	8
+../Core/Src/main.c:862:6:Error_Handler	1

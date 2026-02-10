@@ -118,7 +118,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   uint8_t value = 0;
   uint8_t* pValue = &value;
-  I2C_Read_Via_DMA(0x82, 0x00, pValue, 1);
+  I2C_Read_Via_DMA(0x82, 0x01, pValue, 1);
   I2C_Read_1Byte(0x82, 0x01, pValue);
   HAL_Delay(2);
 
@@ -574,7 +574,8 @@ static void DMA_Transmit(const uint8_t * pBuffer, uint8_t size)
 
 	    /* Set memory address */
 	    DMA1_Stream4->M0AR = (uint32_t)pBuffer;
-			DMA1_Stream4->PAR=(uint32_t)&I2C1->DR;
+
+		DMA1_Stream4->PAR=(uint32_t)&I2C3->DR;
 	    /* Set number of data items */
 	    DMA1_Stream4->NDTR = size;
 
@@ -720,9 +721,9 @@ static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive)
 		while(DMA1_Stream2->CR & DMA_SxCR_EN);
 
 		//set periph address, i2c dr.
-		DMA1_Stream2->PAR = (uint32_t)&(I2C3->DR);
+		DMA1_Stream2->PAR = (uint32_t)&I2C3->DR;
 		//set memory address, pBuffer
-		DMA1_Stream2->M0AR = *pBuffer;
+		DMA1_Stream2->M0AR = (uint32_t)pBuffer;
 		//size of xfer
 		DMA1_Stream2->NDTR = sizeReceive;
 		//clear all interrupts

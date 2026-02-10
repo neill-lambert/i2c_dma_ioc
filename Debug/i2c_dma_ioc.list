@@ -518,10 +518,10 @@ int main(void)
   uint8_t* pValue = &value;
  80005d6:	1cfb      	adds	r3, r7, #3
  80005d8:	607b      	str	r3, [r7, #4]
-  I2C_Read_Via_DMA(0x82, 0x00, pValue, 1);
+  I2C_Read_Via_DMA(0x82, 0x01, pValue, 1);
  80005da:	2301      	movs	r3, #1
  80005dc:	687a      	ldr	r2, [r7, #4]
- 80005de:	2100      	movs	r1, #0
+ 80005de:	2101      	movs	r1, #1
  80005e0:	2082      	movs	r0, #130	@ 0x82
  80005e2:	f000 fa33 	bl	8000a4c <I2C_Read_Via_DMA>
   I2C_Read_1Byte(0x82, 0x01, pValue);
@@ -1439,7 +1439,7 @@ static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive)
 	if (pBuffer != NULL)
  8000b5c:	687b      	ldr	r3, [r7, #4]
  8000b5e:	2b00      	cmp	r3, #0
- 8000b60:	d03a      	beq.n	8000bd8 <DMA_Receive+0x88>
+ 8000b60:	d039      	beq.n	8000bd6 <DMA_Receive+0x86>
 	{
 		//i2c configuration..
 		// 1. Ensure the stream is disabled before configuring
@@ -1458,75 +1458,75 @@ static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive)
  8000b7a:	d1f9      	bne.n	8000b70 <DMA_Receive+0x20>
 
 		//set periph address, i2c dr.
-		DMA1_Stream2->PAR = (uint32_t)&(I2C3->DR);
+		DMA1_Stream2->PAR = (uint32_t)&I2C3->DR;
  8000b7c:	4b19      	ldr	r3, [pc, #100]	@ (8000be4 <DMA_Receive+0x94>)
  8000b7e:	4a1a      	ldr	r2, [pc, #104]	@ (8000be8 <DMA_Receive+0x98>)
  8000b80:	609a      	str	r2, [r3, #8]
 		//set memory address, pBuffer
-		DMA1_Stream2->M0AR = *pBuffer;
- 8000b82:	687b      	ldr	r3, [r7, #4]
- 8000b84:	781a      	ldrb	r2, [r3, #0]
- 8000b86:	4b17      	ldr	r3, [pc, #92]	@ (8000be4 <DMA_Receive+0x94>)
- 8000b88:	60da      	str	r2, [r3, #12]
+		DMA1_Stream2->M0AR = (uint32_t)pBuffer;
+ 8000b82:	4a18      	ldr	r2, [pc, #96]	@ (8000be4 <DMA_Receive+0x94>)
+ 8000b84:	687b      	ldr	r3, [r7, #4]
+ 8000b86:	60d3      	str	r3, [r2, #12]
 		//size of xfer
 		DMA1_Stream2->NDTR = sizeReceive;
- 8000b8a:	4a16      	ldr	r2, [pc, #88]	@ (8000be4 <DMA_Receive+0x94>)
- 8000b8c:	78fb      	ldrb	r3, [r7, #3]
- 8000b8e:	6053      	str	r3, [r2, #4]
+ 8000b88:	4a16      	ldr	r2, [pc, #88]	@ (8000be4 <DMA_Receive+0x94>)
+ 8000b8a:	78fb      	ldrb	r3, [r7, #3]
+ 8000b8c:	6053      	str	r3, [r2, #4]
 		//clear all interrupts
 		DMA1->LIFCR |= DMA_LIFCR_CTCIF2;
- 8000b90:	4b16      	ldr	r3, [pc, #88]	@ (8000bec <DMA_Receive+0x9c>)
- 8000b92:	689b      	ldr	r3, [r3, #8]
- 8000b94:	4a15      	ldr	r2, [pc, #84]	@ (8000bec <DMA_Receive+0x9c>)
- 8000b96:	f443 1300 	orr.w	r3, r3, #2097152	@ 0x200000
- 8000b9a:	6093      	str	r3, [r2, #8]
+ 8000b8e:	4b17      	ldr	r3, [pc, #92]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000b90:	689b      	ldr	r3, [r3, #8]
+ 8000b92:	4a16      	ldr	r2, [pc, #88]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000b94:	f443 1300 	orr.w	r3, r3, #2097152	@ 0x200000
+ 8000b98:	6093      	str	r3, [r2, #8]
 
 		DMA1->LIFCR |= DMA_LIFCR_CHTIF2;
- 8000b9c:	4b13      	ldr	r3, [pc, #76]	@ (8000bec <DMA_Receive+0x9c>)
- 8000b9e:	689b      	ldr	r3, [r3, #8]
- 8000ba0:	4a12      	ldr	r2, [pc, #72]	@ (8000bec <DMA_Receive+0x9c>)
- 8000ba2:	f443 1380 	orr.w	r3, r3, #1048576	@ 0x100000
- 8000ba6:	6093      	str	r3, [r2, #8]
+ 8000b9a:	4b14      	ldr	r3, [pc, #80]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000b9c:	689b      	ldr	r3, [r3, #8]
+ 8000b9e:	4a13      	ldr	r2, [pc, #76]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000ba0:	f443 1380 	orr.w	r3, r3, #1048576	@ 0x100000
+ 8000ba4:	6093      	str	r3, [r2, #8]
 
 		DMA1->LIFCR |= DMA_LIFCR_CTEIF2;
- 8000ba8:	4b10      	ldr	r3, [pc, #64]	@ (8000bec <DMA_Receive+0x9c>)
- 8000baa:	689b      	ldr	r3, [r3, #8]
- 8000bac:	4a0f      	ldr	r2, [pc, #60]	@ (8000bec <DMA_Receive+0x9c>)
- 8000bae:	f443 2300 	orr.w	r3, r3, #524288	@ 0x80000
- 8000bb2:	6093      	str	r3, [r2, #8]
+ 8000ba6:	4b11      	ldr	r3, [pc, #68]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000ba8:	689b      	ldr	r3, [r3, #8]
+ 8000baa:	4a10      	ldr	r2, [pc, #64]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000bac:	f443 2300 	orr.w	r3, r3, #524288	@ 0x80000
+ 8000bb0:	6093      	str	r3, [r2, #8]
 
 		DMA1->LIFCR |= DMA_LIFCR_CDMEIF2;
- 8000bb4:	4b0d      	ldr	r3, [pc, #52]	@ (8000bec <DMA_Receive+0x9c>)
- 8000bb6:	689b      	ldr	r3, [r3, #8]
- 8000bb8:	4a0c      	ldr	r2, [pc, #48]	@ (8000bec <DMA_Receive+0x9c>)
- 8000bba:	f443 2380 	orr.w	r3, r3, #262144	@ 0x40000
- 8000bbe:	6093      	str	r3, [r2, #8]
+ 8000bb2:	4b0e      	ldr	r3, [pc, #56]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000bb4:	689b      	ldr	r3, [r3, #8]
+ 8000bb6:	4a0d      	ldr	r2, [pc, #52]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000bb8:	f443 2380 	orr.w	r3, r3, #262144	@ 0x40000
+ 8000bbc:	6093      	str	r3, [r2, #8]
 
 		DMA1->LIFCR |= DMA_LIFCR_CFEIF2;
- 8000bc0:	4b0a      	ldr	r3, [pc, #40]	@ (8000bec <DMA_Receive+0x9c>)
- 8000bc2:	689b      	ldr	r3, [r3, #8]
- 8000bc4:	4a09      	ldr	r2, [pc, #36]	@ (8000bec <DMA_Receive+0x9c>)
- 8000bc6:	f443 3380 	orr.w	r3, r3, #65536	@ 0x10000
- 8000bca:	6093      	str	r3, [r2, #8]
+ 8000bbe:	4b0b      	ldr	r3, [pc, #44]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000bc0:	689b      	ldr	r3, [r3, #8]
+ 8000bc2:	4a0a      	ldr	r2, [pc, #40]	@ (8000bec <DMA_Receive+0x9c>)
+ 8000bc4:	f443 3380 	orr.w	r3, r3, #65536	@ 0x10000
+ 8000bc8:	6093      	str	r3, [r2, #8]
 
 		//enable dma
 		DMA1_Stream2->CR |= DMA_SxCR_EN;
- 8000bcc:	4b05      	ldr	r3, [pc, #20]	@ (8000be4 <DMA_Receive+0x94>)
- 8000bce:	681b      	ldr	r3, [r3, #0]
- 8000bd0:	4a04      	ldr	r2, [pc, #16]	@ (8000be4 <DMA_Receive+0x94>)
- 8000bd2:	f043 0301 	orr.w	r3, r3, #1
- 8000bd6:	6013      	str	r3, [r2, #0]
+ 8000bca:	4b06      	ldr	r3, [pc, #24]	@ (8000be4 <DMA_Receive+0x94>)
+ 8000bcc:	681b      	ldr	r3, [r3, #0]
+ 8000bce:	4a05      	ldr	r2, [pc, #20]	@ (8000be4 <DMA_Receive+0x94>)
+ 8000bd0:	f043 0301 	orr.w	r3, r3, #1
+ 8000bd4:	6013      	str	r3, [r2, #0]
 	}
 	else
 	{
 		//do nothing
 	}
 }
- 8000bd8:	bf00      	nop
- 8000bda:	370c      	adds	r7, #12
- 8000bdc:	46bd      	mov	sp, r7
- 8000bde:	f85d 7b04 	ldr.w	r7, [sp], #4
- 8000be2:	4770      	bx	lr
+ 8000bd6:	bf00      	nop
+ 8000bd8:	370c      	adds	r7, #12
+ 8000bda:	46bd      	mov	sp, r7
+ 8000bdc:	f85d 7b04 	ldr.w	r7, [sp], #4
+ 8000be0:	4770      	bx	lr
+ 8000be2:	bf00      	nop
  8000be4:	40026040 	.word	0x40026040
  8000be8:	40005c10 	.word	0x40005c10
  8000bec:	40026000 	.word	0x40026000
