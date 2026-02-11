@@ -775,7 +775,7 @@ void ReleaseSerialBus( void )
 	while(!(GPIOC->IDR & (1<<9))){
 		for (int i = 0; i < 15; i++)
 		{
-		GPIOA->ODR &= ~(1<<8);
+		GPIOA->ODR &= ~(1<<8); //toggle clock in bursts of 15 til sda is released. this works!
 		GPIOA->ODR |= (1<<8);
 		}
 	};

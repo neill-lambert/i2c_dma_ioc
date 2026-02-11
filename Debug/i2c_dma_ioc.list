@@ -1620,7 +1620,7 @@ void ReleaseSerialBus( void )
  8000c74:	607b      	str	r3, [r7, #4]
  8000c76:	e00e      	b.n	8000c96 <ReleaseSerialBus+0xa6>
 		{
-		GPIOA->ODR &= ~(1<<8);
+		GPIOA->ODR &= ~(1<<8); //toggle clock in bursts of 15 til sda is released. this works!
  8000c78:	4b45      	ldr	r3, [pc, #276]	@ (8000d90 <ReleaseSerialBus+0x1a0>)
  8000c7a:	695b      	ldr	r3, [r3, #20]
  8000c7c:	4a44      	ldr	r2, [pc, #272]	@ (8000d90 <ReleaseSerialBus+0x1a0>)
