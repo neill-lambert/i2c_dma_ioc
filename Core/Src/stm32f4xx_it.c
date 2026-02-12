@@ -206,9 +206,26 @@ void SysTick_Handler(void)
 void DMA1_Stream2_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA1_Stream2_IRQn 0 */
+	if((DMA1->LISR)&DMA_LISR_TCIF2)
+			{
+			//finished=1;
+			//log_debug("I2C finished receiving using DMA1_Stream2");
+			I2C3->CR1 |= I2C_CR1_STOP;
+			DMA1->LIFCR=DMA_LIFCR_CTCIF2;
+			}
+	if((DMA1->LISR)&DMA_LISR_HTIF2)
+			{
+			//log_debug("DMA1 stream2 half transfer interrupt");
+			DMA1->LIFCR=DMA_LIFCR_CHTIF2;
+			}
 
+	if((DMA1->LISR)&DMA_LISR_TEIF2)
+			{
+			//log_debug("DMA1 stream5 error");
+			DMA1->LIFCR=DMA_LIFCR_CTEIF2;
+			}
   /* USER CODE END DMA1_Stream2_IRQn 0 */
-  HAL_DMA_IRQHandler(&hdma_i2c3_rx);
+  //HAL_DMA_IRQHandler(&hdma_i2c3_rx);
   /* USER CODE BEGIN DMA1_Stream2_IRQn 1 */
 
   /* USER CODE END DMA1_Stream2_IRQn 1 */
@@ -220,9 +237,29 @@ void DMA1_Stream2_IRQHandler(void)
 void DMA1_Stream4_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA1_Stream4_IRQn 0 */
+	if((DMA1->HISR)&DMA_HISR_TCIF4)
+			{
+			//log_debug("I2C finished transmiting using DMA1_Stream6");
+			//finished=1;
+			I2C3->CR1 |= I2C_CR1_STOP;
+			DMA1->HIFCR=DMA_HIFCR_CTCIF4;
+
+			}
+	if((DMA1->HISR)&DMA_HISR_HTIF4)
+			{
+			//log_debug("DMA1 stream6 half transfer interrupt");
+			DMA1->HIFCR=DMA_HIFCR_CHTIF4;
+			}
+
+	if((DMA1->HISR)&DMA_HISR_TEIF4)
+			{
+			//log_debug("DMA1 stream6 error");
+			DMA1->HIFCR=DMA_HIFCR_CTEIF4;
+			}
 
   /* USER CODE END DMA1_Stream4_IRQn 0 */
-  HAL_DMA_IRQHandler(&hdma_i2c3_tx);
+
+  //HAL_DMA_IRQHandler(&hdma_i2c3_tx);
   /* USER CODE BEGIN DMA1_Stream4_IRQn 1 */
 
   /* USER CODE END DMA1_Stream4_IRQn 1 */
@@ -236,8 +273,10 @@ void I2C3_EV_IRQHandler(void)
   /* USER CODE BEGIN I2C3_EV_IRQn 0 */
 
   /* USER CODE END I2C3_EV_IRQn 0 */
-  HAL_I2C_EV_IRQHandler(&hi2c3);
-  /* USER CODE BEGIN I2C3_EV_IRQn 1 */
+  //HAL_I2C_EV_IRQHandler(&hi2c3);
+	asm("nop");
+
+	/* USER CODE BEGIN I2C3_EV_IRQn 1 */
 
   /* USER CODE END I2C3_EV_IRQn 1 */
 }
@@ -250,7 +289,7 @@ void I2C3_ER_IRQHandler(void)
   /* USER CODE BEGIN I2C3_ER_IRQn 0 */
 
   /* USER CODE END I2C3_ER_IRQn 0 */
-  HAL_I2C_ER_IRQHandler(&hi2c3);
+  //HAL_I2C_ER_IRQHandler(&hi2c3);
   /* USER CODE BEGIN I2C3_ER_IRQn 1 */
 
   /* USER CODE END I2C3_ER_IRQn 1 */
