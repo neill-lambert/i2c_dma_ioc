@@ -80,19 +80,19 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-//I2C_HandleTypeDef hi2c3;
-//DMA_HandleTypeDef hdma_i2c3_rx;
-//DMA_HandleTypeDef hdma_i2c3_tx;
+I2C_HandleTypeDef hi2c3;
+DMA_HandleTypeDef hdma_i2c3_rx;
+DMA_HandleTypeDef hdma_i2c3_tx;
 
 /* USER CODE BEGIN PV */
+uint8_t Val2 = 0;
+uint8_t value = 0;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-//static void MX_GPIO_Init(void);
-//static void MX_DMA_Init(void);
-//static void MX_I2C3_Init(void);
+
 /* USER CODE BEGIN PFP */
 //void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c);
 void I2CTransfer ( void ); //unfinished xfer
@@ -105,6 +105,8 @@ void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive);
 static void DMA_Transmit(const uint8_t * pBuffer, uint8_t size);
 void ReleaseSerialBus( void );
+void stmpe811_TS_Start(uint8_t DeviceAddr);
+void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -126,7 +128,7 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  //HAL_Init();
+  HAL_Init();
 
   /* USER CODE BEGIN Init */
 
@@ -153,13 +155,14 @@ int main(void)
   /* Initialize all configured peripherals */
 
   /* USER CODE BEGIN 2 */
-  uint8_t value = 0;
+  I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_OFF);
+  I2C_Read_1Byte(0x82, STMPE811_REG_SYS_CTRL1);
+	HAL_Delay(10);
+  I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_ON);
+  I2C_Read_1Byte(0x82, STMPE811_REG_SYS_CTRL1);
+	HAL_Delay(10);
+  stmpe811_TS_Start(STMPE811_DEVICE_ADDRESS);
 
-  value = I2C_Read_1Byte(0x82, 0x22);
-  I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_ADC_CTRL2, 0x0D);
-  value = I2C_Read_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_ADC_CTRL2);
-  I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_ADC_CTRL2, 0xE);
-  value = I2C_Read_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_ADC_CTRL2);
 
   /* USER CODE END 2 */
 
@@ -220,90 +223,6 @@ void SystemClock_Config(void)
   }
 }
 
-///**
-//  * @brief I2C3 Initialization Function
-//  * @param None
-//  * @retval None
-//  */
-//static void MX_I2C3_Init(void)
-//{
-//
-//  /* USER CODE BEGIN I2C3_Init 0 */
-//
-//  /* USER CODE END I2C3_Init 0 */
-//
-//  /* USER CODE BEGIN I2C3_Init 1 */
-//
-//  /* USER CODE END I2C3_Init 1 */
-//  hi2c3.Instance = I2C3;
-//  hi2c3.Init.ClockSpeed = 100000;
-//  hi2c3.Init.DutyCycle = I2C_DUTYCYCLE_2;
-//  hi2c3.Init.OwnAddress1 = 0;
-//  hi2c3.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-//  hi2c3.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-//  hi2c3.Init.OwnAddress2 = 0;
-//  hi2c3.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-//  hi2c3.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-//  if (HAL_I2C_Init(&hi2c3) != HAL_OK)
-//  {
-//    Error_Handler();
-//  }
-//
-//  /** Configure Analogue filter
-//  */
-//  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c3, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
-//  {
-//    Error_Handler();
-//  }
-//
-//  /** Configure Digital filter
-//  */
-//  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c3, 0) != HAL_OK)
-//  {
-//    Error_Handler();
-//  }
-//  /* USER CODE BEGIN I2C3_Init 2 */
-//
-//  /* USER CODE END I2C3_Init 2 */
-//
-//}
-//
-///**
-//  * Enable DMA controller clock
-//  */
-//static void MX_DMA_Init(void)
-//{
-//
-//  /* DMA controller clock enable */
-//  __HAL_RCC_DMA1_CLK_ENABLE();
-//
-//  /* DMA interrupt init */
-//  /* DMA1_Stream2_IRQn interrupt configuration */
-//  HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
-//  HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
-//  /* DMA1_Stream4_IRQn interrupt configuration */
-//  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
-//  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
-//
-//}
-//
-///**
-//  * @brief GPIO Initialization Function
-//  * @param None
-//  * @retval None
-//  */
-//static void MX_GPIO_Init(void)
-//{
-///* USER CODE BEGIN MX_GPIO_Init_1 */
-///* USER CODE END MX_GPIO_Init_1 */
-//
-//  /* GPIO Ports Clock Enable */
-//  __HAL_RCC_GPIOC_CLK_ENABLE();
-//  __HAL_RCC_GPIOA_CLK_ENABLE();
-//
-///* USER CODE BEGIN MX_GPIO_Init_2 */
-///* USER CODE END MX_GPIO_Init_2 */
-//}
 
 /* USER CODE BEGIN 4 */
 ///**
@@ -471,7 +390,7 @@ static void my_I2C3_Init(void)
 	I2C3->CR2 |= I2C_CR2_LAST;  //set next DMA EOT is last transfer
 
 
-	I2C3->CR2 |= I2C_CR2_DMAEN;
+//	I2C3->CR2 |= I2C_CR2_DMAEN;
 
 }
 
@@ -522,7 +441,7 @@ uint8_t I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address)
 	I2C3->CR1 |= (1<<9);  // Stop I2C
 
 	while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
-
+	Val2 = I2C3->DR;
 	return I2C3->DR;  // return the data from the DATA REG
 }
 
@@ -546,12 +465,12 @@ void I2C_Write_1Byte  (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t u
 	//I2C WRITE
 	while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
 	//wait for dr to be empty?
-	I2C3->DR = uc_Reg_Address; //0xO IS REG VALUE TO WRITE INTO THE I2C DR
+	I2C3->DR = (uint16_t)uc_Reg_Address; //0xO IS REG VALUE TO WRITE INTO THE I2C DR
 
 	while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
 	//wait for dr to be empty?
-	I2C3->DR = ((uc_Data));  //  send the device address+0x01, during the write function. Basically we need to set the R/W bit (Bit 0) low during the write operation. This is common for all the devices that you will use for the I2C.
-
+	I2C3->DR = ((uc_Data) + 0x00);  //  send the device address+0x01, during the write function. Basically we need to set the R/W bit (Bit 0) low during the write operation. This is common for all the devices that you will use for the I2C.
+	Val2 = I2C3->DR;
 	while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
 	while (!(I2C3->SR1 & (1<<2)));  // wait for BTF bit to set
 
@@ -781,6 +700,65 @@ void ReleaseSerialBus( void )
 	I2C3->CR1 |= I2C_CR1_PE;
 
 	//more from stack exchange... https://electronics.stackexchange.com/questions/272427/stm32-busy-flag-is-set-after-i2c-initialization
+}
+
+void stmpe811_TS_Start(uint8_t DeviceAddr)
+{
+	uint8_t uc_Mode;
+	//get current reg value for ctrl 2
+	uc_Mode = I2C_Read_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL2);
+
+	//set functionalities to be enabled
+	uc_Mode &= ~(REG_SYS_CTRL2_IO_FCT); //turn everything off
+
+	//write new reg val
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL2, uc_Mode);
+	I2C_Read_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL2);
+	//sel tsc pins in tsc af mode
+	stmpe811_IO_EnableAF(DeviceAddr, REG_IO_AF_TOUCH_IO_ALL);
+	//set functionalities to enable
+	//tsc adc and ts compensation enable
+	uc_Mode &= ~(REG_SYS_CTRL2_TSC_FCT | REG_SYS_CTRL2_ADC_FCT | REG_SYS_CTRL2_TS_FCT);
+	//SET NEW REG VAL
+	//NB TEMP SENSOR NEEDED TO COMPENSATE TOUCH SCREEN PARAMS
+	//ADC IS USED FOR 4 WIRE TOUCH SCREEN OPERATION
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL2, uc_Mode);
+	// select sample time bit number adc ref
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_ADC_CTRL1, REG_ADC_CTRL1_12_BIT_ADC | REG_ADC_CTRL1_SAMPLE_TIME_80CLK);
+	//WAIT 2MS
+	//HAL_Delay(5);
+	//select adc clk speed 3.25mhz
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_ADC_CTRL2, REG_ADC_CTRL2_3_25MHZ);
+	//SET 2nF FILTER CAP
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_CFG, REG_TSC_CFG_4_SAMPLES | REG_TSC_CFG_TOUCH_DELAY_500uS | REG_TSC_CFG_SETTLING_TIME_500Us);
+
+	//CFG TOUCH FIFO THRESHOLD
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_FIFO_TH, 0x01);
+	//CLEAR FIFO MEM
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_FIFO_STA, 0x01);
+	//BACK INTO OPERATION MODE
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_FIFO_STA, 0x00);
+	//SET RANGE + ACCURACY OF PRESSURE MEASUREMENT
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_FRACT_XYZ, 0x01);
+	// SET RECHARGE LIMIT FOR TSC PINS 50mA
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_I_DRIVE, 0x01);
+	//ENABLE TSC
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL, 0x01);
+	//CLEAR ALL STATUS PENDING BITS IF ANY
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_INT_STA, 0xFF);
+	//DELAY
+	HAL_Delay(2);
+}
+
+void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin)
+{
+	uint8_t tmp = 0;
+	//get current reg value
+	tmp = I2C_Read_1Byte(DeviceAddr, STMPE811_REG_TO_AF);
+	//enable selected pin af
+	tmp &= ~(uint8_t) IO_Pin;
+	//and write it back
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TO_AF, tmp);
 }
 
 //void DMA1_Stream2_IRQHandler(void) //rx

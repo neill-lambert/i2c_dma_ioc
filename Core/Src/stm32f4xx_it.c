@@ -225,7 +225,7 @@ void DMA1_Stream2_IRQHandler(void)
 			DMA1->LIFCR=DMA_LIFCR_CTEIF2;
 			}
   /* USER CODE END DMA1_Stream2_IRQn 0 */
-  //HAL_DMA_IRQHandler(&hdma_i2c3_rx);
+  HAL_DMA_IRQHandler(&hdma_i2c3_rx);
   /* USER CODE BEGIN DMA1_Stream2_IRQn 1 */
 
   /* USER CODE END DMA1_Stream2_IRQn 1 */
@@ -258,8 +258,7 @@ void DMA1_Stream4_IRQHandler(void)
 			}
 
   /* USER CODE END DMA1_Stream4_IRQn 0 */
-
-  //HAL_DMA_IRQHandler(&hdma_i2c3_tx);
+  HAL_DMA_IRQHandler(&hdma_i2c3_tx);
   /* USER CODE BEGIN DMA1_Stream4_IRQn 1 */
 
   /* USER CODE END DMA1_Stream4_IRQn 1 */
@@ -273,10 +272,8 @@ void I2C3_EV_IRQHandler(void)
   /* USER CODE BEGIN I2C3_EV_IRQn 0 */
 
   /* USER CODE END I2C3_EV_IRQn 0 */
-  //HAL_I2C_EV_IRQHandler(&hi2c3);
-	asm("nop");
-
-	/* USER CODE BEGIN I2C3_EV_IRQn 1 */
+  HAL_I2C_EV_IRQHandler(&hi2c3);
+  /* USER CODE BEGIN I2C3_EV_IRQn 1 */
 
   /* USER CODE END I2C3_EV_IRQn 1 */
 }
@@ -289,7 +286,7 @@ void I2C3_ER_IRQHandler(void)
   /* USER CODE BEGIN I2C3_ER_IRQn 0 */
 
   /* USER CODE END I2C3_ER_IRQn 0 */
-  //HAL_I2C_ER_IRQHandler(&hi2c3);
+  HAL_I2C_ER_IRQHandler(&hi2c3);
   /* USER CODE BEGIN I2C3_ER_IRQn 1 */
 
   /* USER CODE END I2C3_ER_IRQn 1 */
