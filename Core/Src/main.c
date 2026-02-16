@@ -41,6 +41,7 @@
 #define STMPE811_REG_CHP_ID_LSB 0x01
 #define STMPE811_REG_SYS_CTRL1  0x03
 #define STMPE811_REG_SYS_CTRL2  0x04
+#define STMPE811_REG_INT_EN		0x0A
 #define STMPE811_REG_INT_STA	0x0B
 #define STMPE811_REG_TO_AF		0x17
 #define STMPE811_REG_ADC_CTRL1	0x20
@@ -52,7 +53,7 @@
 #define STMPE811_REG_FIFO_SIZE	0x4C
 #define STMPE811_REG_TSC_FRACT_XYZ 0x56
 #define STMPE811_REG_TSC_I_DRIVE   0x58
-#define STMPE811_REG_TSC_DATA_NON_INC 0xD7
+#define STMPE811_REG_TSC_DATA_NON_INC 0x57
 
 //register values
 
@@ -70,6 +71,7 @@
 #define REG_TSC_CFG_SETTLING_TIME_500Us	0x02
 #define REG_TSC__TS_CTRL_STATUS	0x80
 #define REG_IO_AF_TOUCH_IO_ALL	0xF0
+#define REG_TSC_CTRL_OP_MODE_Z_ONLY 	(0X01 << 3)
 
 #define I2CxTIMEOUT			10 //mS  //not using this right now???
 /* USER CODE END PD */
@@ -85,8 +87,9 @@ DMA_HandleTypeDef hdma_i2c3_rx;
 DMA_HandleTypeDef hdma_i2c3_tx;
 
 /* USER CODE BEGIN PV */
-uint8_t Val2 = 0;
-uint8_t value = 0;
+//touch info
+uint16_t us_TouchPointX, us_TouchPointY; 		//x/y locations
+uint32_t ul_TouchCount;		// number of touch events
 
 /* USER CODE END PV */
 
@@ -107,6 +110,11 @@ static void DMA_Transmit(const uint8_t * pBuffer, uint8_t size);
 void ReleaseSerialBus( void );
 void stmpe811_TS_Start(uint8_t DeviceAddr);
 void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin);
+void Touch_Init(uint8_t DeviceAddr);
+uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr);
+void stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y);
+void Touch_Process (void);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -144,8 +152,6 @@ int main(void)
   if(!(GPIOC->IDR & GPIO_IDR_ID9)) //sda low if i2c3 locked
 	  	  	  ReleaseSerialBus();
   my_I2C3_Init();
-  //ReleaseSerialBus();
-
   my_DMA_Init();
 
 
@@ -155,13 +161,8 @@ int main(void)
   /* Initialize all configured peripherals */
 
   /* USER CODE BEGIN 2 */
-  I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_OFF);
-  I2C_Read_1Byte(0x82, STMPE811_REG_SYS_CTRL1);
-	HAL_Delay(10);
-  I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_ON);
-  I2C_Read_1Byte(0x82, STMPE811_REG_SYS_CTRL1);
-	HAL_Delay(10);
-  stmpe811_TS_Start(STMPE811_DEVICE_ADDRESS);
+  Touch_Init(STMPE811_DEVICE_ADDRESS);
+
 
 
   /* USER CODE END 2 */
@@ -170,8 +171,9 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  Touch_Process();
     /* USER CODE END WHILE */
-
+	  asm("nop");
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -390,7 +392,7 @@ static void my_I2C3_Init(void)
 	I2C3->CR2 |= I2C_CR2_LAST;  //set next DMA EOT is last transfer
 
 
-//	I2C3->CR2 |= I2C_CR2_DMAEN;
+	I2C3->CR2 |= I2C_CR2_DMAEN;
 
 }
 
@@ -441,7 +443,6 @@ uint8_t I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address)
 	I2C3->CR1 |= (1<<9);  // Stop I2C
 
 	while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
-	Val2 = I2C3->DR;
 	return I2C3->DR;  // return the data from the DATA REG
 }
 
@@ -470,7 +471,6 @@ void I2C_Write_1Byte  (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t u
 	while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
 	//wait for dr to be empty?
 	I2C3->DR = ((uc_Data) + 0x00);  //  send the device address+0x01, during the write function. Basically we need to set the R/W bit (Bit 0) low during the write operation. This is common for all the devices that you will use for the I2C.
-	Val2 = I2C3->DR;
 	while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
 	while (!(I2C3->SR1 & (1<<2)));  // wait for BTF bit to set
 
@@ -523,7 +523,7 @@ void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	while(I2C3->SR2&I2C_SR2_BUSY){;}
 
 	//I2C START
-	//I2C3->CR1 |= I2C_CR1_ACK;
+	I2C3->CR1 |= I2C_CR1_ACK;
 	I2C3->CR1 |= I2C_CR1_START;
 	while(!(I2C3->SR1&I2C_SR1_SB)){;} //while (!(I2C3->SR1 & I2C_SR1_SB));
 
@@ -532,6 +532,7 @@ void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	I2C3->DR = (uc_Dev_Address | 0);  //send the device address with write
 
 	while(((I2C3->SR1)&I2C_SR1_ADDR)==0){;} //while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
+	I2C3->CR1 &= ~I2C_CR1_ACK;	//ack disable before unsetting addr
 
 	(void) I2C3->SR1;
 	(void) I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
@@ -575,10 +576,16 @@ void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *
 	while(((I2C3->SR1)&I2C_SR1_ADDR)==0){;}
 	//start DMA
 	DMA_Receive(uc_pReadBuffer, size);
+	//while (!(I2C3->SR1 & (1<<2)));  // wait for BTF bit to set
+
+	//while (!(I2C3->SR1 & (1<<4)));  // wait for STOPF bit to set
 
 	//read sr1 and sr2
 	(void) I2C3->SR1;
 	(void) I2C3->SR2;
+
+	//while(I2C3->SR2&I2C_SR2_BUSY){;}
+
 }
 
 static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive)
@@ -588,7 +595,9 @@ static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive)
 		//i2c configuration..
 		// 1. Ensure the stream is disabled before configuring
 		DMA1_Stream2->CR &= ~DMA_SxCR_EN;
-		while(DMA1_Stream2->CR & DMA_SxCR_EN);
+		while(DMA1_Stream2->CR & DMA_SxCR_EN)	{
+			//DO NOTHING
+		}
 
 		//set periph address, i2c dr.
 		DMA1_Stream2->PAR = (uint32_t)&I2C3->DR;
@@ -725,13 +734,10 @@ void stmpe811_TS_Start(uint8_t DeviceAddr)
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL2, uc_Mode);
 	// select sample time bit number adc ref
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_ADC_CTRL1, REG_ADC_CTRL1_12_BIT_ADC | REG_ADC_CTRL1_SAMPLE_TIME_80CLK);
-	//WAIT 2MS
-	//HAL_Delay(5);
 	//select adc clk speed 3.25mhz
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_ADC_CTRL2, REG_ADC_CTRL2_3_25MHZ);
 	//SET 2nF FILTER CAP
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_CFG, REG_TSC_CFG_4_SAMPLES | REG_TSC_CFG_TOUCH_DELAY_500uS | REG_TSC_CFG_SETTLING_TIME_500Us);
-
 	//CFG TOUCH FIFO THRESHOLD
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_FIFO_TH, 0x01);
 	//CLEAR FIFO MEM
@@ -742,6 +748,8 @@ void stmpe811_TS_Start(uint8_t DeviceAddr)
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_FRACT_XYZ, 0x01);
 	// SET RECHARGE LIMIT FOR TSC PINS 50mA
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_I_DRIVE, 0x01);
+	//tsc op mode z only. bits 3:1 to 0b100
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL, REG_TSC_CTRL_OP_MODE_Z_ONLY);
 	//ENABLE TSC
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL, 0x01);
 	//CLEAR ALL STATUS PENDING BITS IF ANY
@@ -761,53 +769,98 @@ void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin)
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TO_AF, tmp);
 }
 
-//void DMA1_Stream2_IRQHandler(void) //rx
-//			{
-//
-//			if((DMA1->LISR)&DMA_LISR_TCIF2)
-//					{
-//					//finished=1;
-//					//log_debug("I2C finished receiving using DMA1_Stream2");
-//					I2C3->CR1 |= I2C_CR1_STOP;
-//					DMA1->LIFCR=DMA_LIFCR_CTCIF2;
-//					}
-//			if((DMA1->LISR)&DMA_LISR_HTIF2)
-//					{
-//					//log_debug("DMA1 stream2 half transfer interrupt");
-//					DMA1->LIFCR=DMA_LIFCR_CHTIF2;
-//					}
-//
-//			if((DMA1->LISR)&DMA_LISR_TEIF2)
-//					{
-//					//log_debug("DMA1 stream5 error");
-//					DMA1->LIFCR=DMA_LIFCR_CTEIF2;
-//					}
-//			}
-//
-//void DMA1_Stream4_IRQHandler(void)	//tx
-//			{
-//
-//			if((DMA1->HISR)&DMA_HISR_TCIF4)
-//					{
-//					//log_debug("I2C finished transmiting using DMA1_Stream6");
-//					//finished=1;
-//					I2C3->CR1 |= I2C_CR1_STOP;
-//					DMA1->HIFCR=DMA_HIFCR_CTCIF4;
-//
-//					}
-//			if((DMA1->HISR)&DMA_HISR_HTIF4)
-//					{
-//					//log_debug("DMA1 stream6 half transfer interrupt");
-//					DMA1->HIFCR=DMA_HIFCR_CHTIF4;
-//					}
-//
-//			if((DMA1->HISR)&DMA_HISR_TEIF4)
-//					{
-//					//log_debug("DMA1 stream6 error");
-//					DMA1->HIFCR=DMA_HIFCR_CTEIF4;
-//					}
-//
-//			}
+void Touch_Init(uint8_t DeviceAddr)
+{
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_OFF);
+	HAL_Delay(10);
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_ON);
+	HAL_Delay(2);
+	stmpe811_TS_Start(DeviceAddr);
+
+}
+
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
+uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr)
+{
+	uint8_t uc_State;
+	uint8_t uc_Touched = 0;
+	//read touch status, check status of z bit
+	uc_State = ((I2C_Read_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL) & REG_TSC__TS_CTRL_STATUS) == REG_TSC__TS_CTRL_STATUS);
+
+	//BIT SET??
+	if (uc_State > 0)
+	{
+		if(I2C_Read_1Byte(DeviceAddr, STMPE811_REG_FIFO_SIZE) > 0)
+		{
+			//TOUCH DETECTED
+			uc_Touched = 1;
+		}
+	}
+	else
+	{
+		//no touch detected
+		//reset fifo
+		I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x01);
+		HAL_Delay(2);
+		//enable fifo again
+		I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x00);
+	}
+	return uc_Touched;
+
+}
+
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
+void Touch_Process (void)
+{
+	//has touch been detected
+	uint8_t uc_TouchDetected = stmpe811_TS_DetectTouch(STMPE811_DEVICE_ADDRESS);
+	if (uc_TouchDetected)
+	{
+		//increment touch count, fetch x/y
+		ul_TouchCount++;
+		//stmpe811_TS_GetXY(&us_TouchPointX, &us_TouchPointY);
+	}
+}
+
+
+/****************************
+ * @brief  |
+ *
+ * @param
+ * @retval
+ */
+void stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
+{
+	uint8_t dataXYZ[4] = {0};
+	uint32_t uldataXYZ;
+
+	//read required regs
+	//I2Cx_ReadBuffer(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
+//	for (int i = 0; i< sizeof(dataXYZ); i++)
+//	{
+//		dataXYZ[i] = I2C_Read_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC);
+//	}
+	I2C_Read_Via_DMA(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
+	//calc pos and values
+	uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3] << 0);
+	*X = (uldataXYZ >> 20) & 0x00000FFF;
+	*Y = (uldataXYZ >> 8) & 0x00000FFF;
+	//reset fifo
+	I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x01);
+	//enable fifo again
+	I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x00);
+
+}
 
 
 /* USER CODE END 4 */
