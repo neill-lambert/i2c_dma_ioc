@@ -841,12 +841,12 @@ void stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
 	uint32_t uldataXYZ;
 
 	//read required regs
-	//I2Cx_ReadBuffer(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
-	for (int i = 0; i< sizeof(dataXYZ); i++)
-	{
-		dataXYZ[i] = I2C_Read_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC);
-	}
-	//I2C_Read_Via_DMA(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
+//	for (int i = 0; i< sizeof(dataXYZ); i++)
+//	{
+//		dataXYZ[i] = I2C_Read_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC);
+//	}
+	I2C_Read_Via_DMA(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
+
 	//calc pos and values
 	uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3] << 0);
 	*X = (uldataXYZ >> 20) & 0x00000FFF;

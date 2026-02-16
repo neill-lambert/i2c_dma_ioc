@@ -16,5 +16,5 @@
 ../Core/Src/main.c:773:6:Touch_Init	1
 ../Core/Src/main.c:788:9:stmpe811_TS_DetectTouch	3
 ../Core/Src/main.c:819:6:Touch_Process	2
-../Core/Src/main.c:838:6:stmpe811_TS_GetXY	2
+../Core/Src/main.c:838:6:stmpe811_TS_GetXY	1
 ../Core/Src/main.c:868:6:Error_Handler	1
