@@ -173,6 +173,7 @@ int main(void)
   {
 	  Touch_Process();
     /* USER CODE END WHILE */
+	//  int val = I2C_Read_1Byte(0x82, 0x00);
 	  asm("nop");
     /* USER CODE BEGIN 3 */
   }
@@ -776,7 +777,6 @@ void Touch_Init(uint8_t DeviceAddr)
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_ON);
 	HAL_Delay(2);
 	stmpe811_TS_Start(DeviceAddr);
-
 }
 
 /****************************
@@ -804,11 +804,7 @@ uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr)
 	else
 	{
 		//no touch detected
-		//reset fifo
-		I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x01);
-		HAL_Delay(2);
-		//enable fifo again
-		I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x00);
+
 	}
 	return uc_Touched;
 
@@ -828,7 +824,7 @@ void Touch_Process (void)
 	{
 		//increment touch count, fetch x/y
 		ul_TouchCount++;
-		//stmpe811_TS_GetXY(&us_TouchPointX, &us_TouchPointY);
+		stmpe811_TS_GetXY(&us_TouchPointX, &us_TouchPointY);
 	}
 }
 
@@ -846,19 +842,19 @@ void stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
 
 	//read required regs
 	//I2Cx_ReadBuffer(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
-//	for (int i = 0; i< sizeof(dataXYZ); i++)
-//	{
-//		dataXYZ[i] = I2C_Read_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC);
-//	}
-	I2C_Read_Via_DMA(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
+	for (int i = 0; i< sizeof(dataXYZ); i++)
+	{
+		dataXYZ[i] = I2C_Read_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC);
+	}
+	//I2C_Read_Via_DMA(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
 	//calc pos and values
 	uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3] << 0);
 	*X = (uldataXYZ >> 20) & 0x00000FFF;
 	*Y = (uldataXYZ >> 8) & 0x00000FFF;
 	//reset fifo
-	I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x01);
+	//I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x01);
 	//enable fifo again
-	I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x00);
+	//I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x00);
 
 }
 
