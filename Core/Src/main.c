@@ -29,7 +29,11 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+enum AddrError{
+	Success,
+	Timeout,
+	Nack
+};
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -53,7 +57,8 @@
 #define STMPE811_REG_FIFO_SIZE	0x4C
 #define STMPE811_REG_TSC_FRACT_XYZ 0x56
 #define STMPE811_REG_TSC_I_DRIVE   0x58
-#define STMPE811_REG_TSC_DATA_NON_INC 0x57
+#define STMPE811_REG_TSC_DATA_NON_INC 0xD7
+#define STMPE811_REG_INT_CTRL	0X09
 
 //register values
 
@@ -90,7 +95,11 @@ DMA_HandleTypeDef hdma_i2c3_tx;
 //touch info
 uint16_t us_TouchPointX, us_TouchPointY; 		//x/y locations
 uint32_t ul_TouchCount;		// number of touch events
-
+uint8_t uc_TouchDetected;
+uint8_t	uc_State_Watch = 0;
+uint16_t RCounter = 0;
+volatile uint8_t g_I2C_TransferComplete = 0;
+enum AddrError myErr;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -104,17 +113,21 @@ static void my_DMA_Init(void);
 static void my_GPIO_Init(void);
 uint8_t I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address);
 void I2C_Write_1Byte  (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t uc_Data);
-void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size);
-static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive);
-static void DMA_Transmit(const uint8_t * pBuffer, uint8_t size);
+uint8_t  I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size); //used to read streams of data from peripheral. eg, x and y coordinates.
 void ReleaseSerialBus( void );
 void stmpe811_TS_Start(uint8_t DeviceAddr);
 void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin);
 void Touch_Init(uint8_t DeviceAddr);
 uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr);
-void stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y);
+uint8_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y);
 void Touch_Process (void);
-
+static enum AddrError I2C_Wait_Addr_With_Timeout(void);
+void Touch_Interrupt_Init(void);
+uint8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value);
+uint8_t STMPE811_Read_Reg_Simple(uint8_t reg);
+void STMPE811_Init_Interrupts(void);
+void STMPE811_Emergency_Clear(void);
+int8_t get_xy_safe(uint16_t *X, uint16_t *Y);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -156,6 +169,7 @@ int main(void)
 
 
 
+
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -163,7 +177,9 @@ int main(void)
   /* USER CODE BEGIN 2 */
   Touch_Init(STMPE811_DEVICE_ADDRESS);
 
+  Touch_Interrupt_Init();
 
+  STMPE811_Init_Interrupts();
 
   /* USER CODE END 2 */
 
@@ -172,9 +188,14 @@ int main(void)
   while (1)
   {
 	  Touch_Process();
-    /* USER CODE END WHILE */
-	//  int val = I2C_Read_1Byte(0x82, 0x00);
+//	  if ( (GPIOA->IDR & (1 << 15)) == 0 ) {
+//	      // If you see the code enter here during a touch,
+//	      // it means the EXTI hardware is the problem.
+//	      // If it NEVER enters here, the sensor is the problem.
+//	  }
 	  asm("nop");
+    /* USER CODE END WHILE */
+
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -267,9 +288,7 @@ static void my_GPIO_Init(void)
 	GPIOA->OSPEEDR |= GPIO_OSPEEDER_OSPEEDR8;
 	//ot8 0x1, O DRAIN
 	GPIOA->OTYPER |= GPIO_OTYPER_OT8;
-	//PIN A8 PULL UP? 01 = PULL UP
-	//GPIOA->PUPDR |= GPIO_PUPDR_PUPDR8_0;
-	//GPIOA->PUPDR &= ~GPIO_PUPDR_PUPDR8_1;
+
 	//GPIOC9 TO AF
 	GPIOC->MODER |= GPIO_MODER_MODER9_1;
 	GPIOC->MODER &= ~GPIO_MODER_MODER9_0;
@@ -280,10 +299,7 @@ static void my_GPIO_Init(void)
 	GPIOC->OSPEEDR |= GPIO_OSPEEDER_OSPEEDR9;
 	//otype9 0x1, O DRAIN
 	GPIOC->OTYPER |= GPIO_OTYPER_OT9;
-	//PIN C9 PULL UP?
-	//PIN A8 PULL UP? 01 = PULL UP
-	//GPIOC->PUPDR |= GPIO_PUPDR_PUPDR9_0;
-	//GPIOC->PUPDR &= ~GPIO_PUPDR_PUPDR9_1;
+
 }
 
 
@@ -297,6 +313,8 @@ static void my_DMA_Init(void)
 {
 	//enable clock access dma1
 	RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
+
+	DMA1_Stream2->CR=0x00;//reset everything
 
 	//clear all interrupts to ensure no misfiring when enabling
 	DMA1->LIFCR |= DMA_LIFCR_CTCIF2;
@@ -359,10 +377,6 @@ static void my_DMA_Init(void)
 	NVIC_SetPriority(DMA1_Stream4_IRQn, 0);
 	NVIC_EnableIRQ(DMA1_Stream4_IRQn);
 
-	//ENABLE
-	DMA1_Stream2->CR |= DMA_SxCR_EN; //rx
-	DMA1_Stream4->CR |= DMA_SxCR_EN; //tx
-
 	I2C3->CR1 |= I2C_CR1_PE;	//i2c start
 
 }
@@ -377,26 +391,19 @@ static void my_DMA_Init(void)
   */
 static void my_I2C3_Init(void)
 {
-	I2C3->CR1	&= ~I2C_CR1_PE;
-	//wait til disabled
-	while(I2C3->CR1 & I2C_CR1_PE);
+    I2C3->CR1 &= ~I2C_CR1_PE;
+    while(I2C3->CR1 & I2C_CR1_PE);
 
-//	I2C3->CR2 |= I2C_CR2_ITERREN;
-//	I2C3->CR2 |= I2C_CR2_ITEVTEN;
-//	NVIC_EnableIRQ(I2C3_EV_IRQn);
+    // Use direct assignment (=) instead of (|=)
+    I2C3->CR2 = 16;   // 16 MHz PCLK1
+    I2C3->CCR = 80;   // 100 kHz Standard Mode
 
-	I2C3->CR2 |= 0x10;
-	I2C3->CCR |= 0x50;
-	I2C3->TRISE |= 0x11;
+    // Increase TRISE slightly to be more "probe friendly"
+    // This gives the signals more time to rise with the extra probe capacitance
+    I2C3->TRISE = 20;
 
-//	I2C3->CR1 &= ~I2C_CR1_ENGC; //disable general call
-	I2C3->CR2 |= I2C_CR2_LAST;  //set next DMA EOT is last transfer
-
-
-	I2C3->CR2 |= I2C_CR2_DMAEN;
-
+    I2C3->CR1 |= I2C_CR1_PE;
 }
-
 
 /************************/
 /**
@@ -444,12 +451,19 @@ uint8_t I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address)
 	I2C3->CR1 |= (1<<9);  // Stop I2C
 
 	while (!(I2C3->SR1 & (1<<6)));  // wait for RxNE to set
+	//(void) I2C3->DR;
+	while ((I2C3->SR2 & (1<<1)));  //wait while bus busy
 	return I2C3->DR;  // return the data from the DATA REG
-}
 
+}
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
 void I2C_Write_1Byte  (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t uc_Data) //rm0090 p849
 {
-
 	//I2C START
 	I2C3->CR1 |= I2C_CR1_ACK;
 	I2C3->CR1 |= I2C_CR1_START;
@@ -477,241 +491,214 @@ void I2C_Write_1Byte  (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t u
 
 	//txe and btf = 1, cleared by stop condition
 	I2C3->CR1 |= (1<<9);  // Stop I2C
+	while ((I2C3->SR2 & (1<<1)));  //wait while bus busy
 
 	(void) I2C3->SR1;
 	(void) I2C3->DR;
 
 }
 
-static void DMA_Transmit(const uint8_t * pBuffer, uint8_t size)
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
+uint8_t  I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size) //used to read streams of data from peripheral. eg, x and y coordinates.
 {
-	  /* Check null pointers */
-	  if(NULL != pBuffer)
-	  {
-	    DMA1_Stream4->CR&=~DMA_SxCR_EN;
-		while((DMA1_Stream4->CR)&DMA_SxCR_EN){;}
+		uint8_t status = 0;
+	// 1. PREPARE DMA1 STREAM 2 (I2C3 RX)
+	    DMA1_Stream2->CR &= ~DMA_SxCR_EN;             // Disable to configure
+	    DMA1_Stream2->M0AR = (uint32_t)uc_pReadBuffer;   // Destination memory
+	    DMA1_Stream2->PAR  = (uint32_t)&I2C3->DR;      // Source peripheral
+	    DMA1_Stream2->NDTR = size;                    // Number of bytes
+	    DMA1_Stream2->CR &= ~DMA_SxCR_CHSEL; // Clear bits 25, 26, 27
+	    DMA1_Stream2->CR |= (3 << 25);       // Set to Channel 3
+	    DMA1_Stream2->CR  |= DMA_SxCR_MINC | DMA_SxCR_TCIE; // Mem Inc + Interrupt
+	    DMA1_Stream2->CR  &= ~DMA_SxCR_DIR;           // Dir: Peri -> Mem
 
-	    /* Set memory address */
-	    DMA1_Stream4->M0AR = (uint32_t)pBuffer;
+	    // 2. PHASE 1: Write Register Address to Sensor
+	    I2C3->CR1 |= I2C_CR1_START;
+	    while (!(I2C3->SR1 & I2C_SR1_SB));            // Wait for Start bit
+	    I2C3->DR = (uc_Dev_Address);                 // Send Slave Addr (Write)
+	    if ((status = I2C_Wait_Addr_With_Timeout()))
+	    {
+	    	return status; //either nack or timeout
+	    }
+	    //addr is set, so clear by reading sr2..
+	    (void)I2C3->SR2;                              // Clear ADDR (Read SR1 then SR2)
+	    I2C3->DR = uc_Reg_Address;                          // Send Register to read
+	    while (!(I2C3->SR1 & I2C_SR1_BTF));           // Wait for Byte Transfer Finished
 
-		DMA1_Stream4->PAR=(uint32_t)&I2C3->DR;
-	    /* Set number of data items */
-	    DMA1_Stream4->NDTR = size;
+	    // 3. PHASE 2: Repeated Start for Reading
+	    I2C3->CR1 |= I2C_CR1_START;
+	    while (!(I2C3->SR1 & I2C_SR1_SB));
+	    I2C3->DR = (uc_Dev_Address) | 0x01;          // Send Slave Addr (Read)
+	    if ((status = I2C_Wait_Addr_With_Timeout()))
+	  	    {
+	  	    	return status; //either nack or timeout
+	  	    }	    //stmpe811_TS_Start
+	    // 4. PHASE 3: Handover to DMA
+	    I2C3->CR1 |= I2C_CR1_ACK;						//enable ack before clearing addr
+	    I2C3->CR2 |= I2C_CR2_LAST;                    // Auto-NACK on last DMA byte
+	    DMA1_Stream2->NDTR = size;                    // Number of bytes
+	    DMA1_Stream2->CR |= DMA_SxCR_EN;              // Start the DMA Stream
+	    //I2C3->CR1 &= ~I2C_CR1_POS;        // Ensure POS is cleared for standard NDTR transfers
+	    I2C3->CR2 |= I2C_CR2_DMAEN;                   // Enable I2C DMA requests
+	    (void) I2C3->SR1;
+	    (void) I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
 
-	    /* Clear all interrupt flags */
-		DMA1->LIFCR |= DMA_LIFCR_CTCIF2;
+	    //5. PHASE 4: wait for hardware to finish
+	    uint32_t timeout = 100000;
+	    while (g_I2C_TransferComplete == 0 && timeout--) {
+	    	asm("nop");
+	        // Add a tiny delay or NOP
+	    }
 
-		DMA1->LIFCR |= DMA_LIFCR_CHTIF2;
+	    if (timeout == 0)
+	    {
+	    	status = 1;
+	    	return status;
+	    	/* Handle Timeout */
+	    }
 
-		DMA1->LIFCR |= DMA_LIFCR_CTEIF2;
-
-		DMA1->LIFCR |= DMA_LIFCR_CDMEIF2;
-
-		DMA1->LIFCR |= DMA_LIFCR_CFEIF2;
-
-	    /* Enable DMA1_Stream4 */
-	    DMA1_Stream4->CR |= DMA_SxCR_EN;
-	  }
-	  else
-	  {
-	    /* Null pointers, do nothing */
-	  }
+	    g_I2C_TransferComplete = 0; // Reset for next time
+	    return status;
 }
 
-void I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size) //used to read streams of data from peripheral. eg, x and y coordinates.
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
+uint8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value)
 {
-	//wait until the bus is free
-	while(I2C3->SR2&I2C_SR2_BUSY){;}
+    // 1. Start Condition
+    I2C3->CR1 |= I2C_CR1_START;
+    uint32_t timeout = 10000;
+    while (!(I2C3->SR1 & I2C_SR1_SB) && --timeout);
+    if (timeout == 0) return -2;
 
-	//I2C START
-	I2C3->CR1 |= I2C_CR1_ACK;
-	I2C3->CR1 |= I2C_CR1_START;
-	while(!(I2C3->SR1&I2C_SR1_SB)){;} //while (!(I2C3->SR1 & I2C_SR1_SB));
+    // 2. Device Address (Write)
+    I2C3->DR = (0x41 << 1); // 7-bit 0x41 shifted
+    if (I2C_Wait_Addr_With_Timeout() != 0) return -1;
+    (void)I2C3->SR2; // Clear ADDR flag
 
-	(void) I2C3->SR1;
+    // 3. Send Register Address
+    I2C3->DR = reg;
+    timeout = 10000;
+    while (!(I2C3->SR1 & I2C_SR1_TXE) && --timeout);
+    if (I2C3->SR1 & I2C_SR1_AF) goto nack_recovery;
 
-	I2C3->DR = (uc_Dev_Address | 0);  //send the device address with write
+    // 4. Send Data Value
+    I2C3->DR = value;
+    timeout = 10000;
+    while (!(I2C3->SR1 & I2C_SR1_BTF) && --timeout);
+    if (I2C3->SR1 & I2C_SR1_AF) goto nack_recovery;
 
-	while(((I2C3->SR1)&I2C_SR1_ADDR)==0){;} //while (!(I2C3->SR1 & (1<<1)));  // wait for ADDR bit to set
-	I2C3->CR1 &= ~I2C_CR1_ACK;	//ack disable before unsetting addr
+    // 5. Stop Condition
+    I2C3->CR1 |= I2C_CR1_STOP;
+    return 0;
 
-	(void) I2C3->SR1;
-	(void) I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
-	//READ ACK HERE TO SEE IF SLAVE HAS SENT IT
-
-	//I2C WRITE
-	while(I2C_SR1_TXE != (I2C_SR1_TXE & I2C3->SR1))	//while (!(I2C3->SR1 & (1<<7)));  // wait for TXE bit to set
-	{
-		//do nothing
-	}
-
-	if (2 <= size)
-	{
-		I2C3->CR1 |= I2C_CR1_ACK; // ack enable
-		I2C3->DR = (uc_Reg_Address);
-	}
-	else
-	{
-		I2C3->CR1 &= ~I2C_CR1_ACK; // ack disable
-		I2C3->DR = uc_Reg_Address;
-	}
-
-	// wait for BTF bit to set
-	while (!(I2C_SR1_BTF & I2C3->SR1))
-	{
-		//DO NOTHING
-	}
-	//I2C START
-	//I2C3->CR1 |= I2C_CR1_ACK;
-	I2C3->CR1 |= I2C_CR1_START;
-
-	//WAIT FOR SB FLAG TO SET
-	while (I2C_SR1_SB != (I2C_SR1_SB & I2C3->SR1))
-	{
-		//DO NOTHING
-	}
-	//read sr1
-	(void) I2C3->SR1;
-	//send slave address with read
-	I2C3->DR = ( uc_Dev_Address | (uint8_t) 0x01);
-	while(((I2C3->SR1)&I2C_SR1_ADDR)==0){;}
-	//start DMA
-	DMA_Receive(uc_pReadBuffer, size);
-	//while (!(I2C3->SR1 & (1<<2)));  // wait for BTF bit to set
-
-	//while (!(I2C3->SR1 & (1<<4)));  // wait for STOPF bit to set
-
-	//read sr1 and sr2
-	(void) I2C3->SR1;
-	(void) I2C3->SR2;
-
-	//while(I2C3->SR2&I2C_SR2_BUSY){;}
-
+nack_recovery:
+    I2C3->SR1 &= ~I2C_SR1_AF;
+    I2C3->CR1 |= I2C_CR1_STOP;
+    return -1;
 }
 
-static void DMA_Receive(uint8_t* pBuffer, uint8_t sizeReceive)
+uint8_t STMPE811_Read_Reg_Simple(uint8_t reg)
 {
-	if (pBuffer != NULL)
-	{
-		//i2c configuration..
-		// 1. Ensure the stream is disabled before configuring
-		DMA1_Stream2->CR &= ~DMA_SxCR_EN;
-		while(DMA1_Stream2->CR & DMA_SxCR_EN)	{
-			//DO NOTHING
-		}
+    // 1. Start & Address (Write mode to send reg address)
+    I2C3->CR1 |= I2C_CR1_START;
+    while (!(I2C3->SR1 & I2C_SR1_SB));
+    I2C3->DR = (0x41 << 1);
+    while (!(I2C3->SR1 & I2C_SR1_ADDR));
+    (void)I2C3->SR2; // Clear ADDR
 
-		//set periph address, i2c dr.
-		DMA1_Stream2->PAR = (uint32_t)&I2C3->DR;
-		//set memory address, pBuffer
-		DMA1_Stream2->M0AR = (uint32_t)pBuffer;
-		//size of xfer
-		DMA1_Stream2->NDTR = sizeReceive;
-		//clear all interrupts
-		DMA1->LIFCR |= DMA_LIFCR_CTCIF2;
+    I2C3->DR = reg;
+    while (!(I2C3->SR1 & I2C_SR1_BTF));
 
-		DMA1->LIFCR |= DMA_LIFCR_CHTIF2;
+    // 2. Repeated Start & Address (Read mode)
+    I2C3->CR1 |= I2C_CR1_START;
+    while (!(I2C3->SR1 & I2C_SR1_SB));
+    I2C3->DR = (0x41 << 1) | 0x01;
+    while (!(I2C3->SR1 & I2C_SR1_ADDR));
 
-		DMA1->LIFCR |= DMA_LIFCR_CTEIF2;
+    // 3. Prepare NACK and STOP before reading the byte
+    I2C3->CR1 &= ~I2C_CR1_ACK;
+    (void)I2C3->SR2; // Clear ADDR starts the clock
+    I2C3->CR1 |= I2C_CR1_STOP;
 
-		DMA1->LIFCR |= DMA_LIFCR_CDMEIF2;
-
-		DMA1->LIFCR |= DMA_LIFCR_CFEIF2;
-
-		//enable dma
-		DMA1_Stream2->CR |= DMA_SxCR_EN;
-
-	}
-	else
-	{
-		//do nothing
-	}
+    // 4. Wait for and return the data
+    while (!(I2C3->SR1 & I2C_SR1_RXNE));
+    return I2C3->DR;
 }
 
-void ReleaseSerialBus( void )
-{
-	I2C3->CR1 &= ~I2C_CR1_PE;	//TURN PE OFF
 
-	//sda to op mode oopen drain
-	GPIOC->MODER |= GPIO_MODER_MODER9_0;
-	GPIOC->MODER &= ~GPIO_MODER_MODER9_1;
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
+void ReleaseSerialBus(void) {
+    uint32_t timeout = 10000;
+    RCounter++;
 
-	//sda to open drain
-	GPIOC->OTYPER |= GPIO_OTYPER_OT9;
+    I2C3->CR1 &= ~I2C_CR1_PE; // Disable peripheral
 
+    // 1. Set SCL (A8) and SDA (C9) to Open Drain Output
+    GPIOA->MODER = (GPIOA->MODER & ~GPIO_MODER_MODER8) | GPIO_MODER_MODER8_0;
+    GPIOA->OTYPER |= GPIO_OTYPER_OT8;
 
-	//sclk to op mode oopen drain
-	GPIOA->MODER |= GPIO_MODER_MODER8_0;
-	GPIOA->MODER &= ~GPIO_MODER_MODER8_1;
+    GPIOC->MODER = (GPIOC->MODER & ~GPIO_MODER_MODER9) | GPIO_MODER_MODER9_0;
+    GPIOC->OTYPER |= GPIO_OTYPER_OT9;
 
-	//sclk to open drain
-	GPIOA->OTYPER |= GPIO_OTYPER_OT8;
+    // 2. The "Clock Out" sequence
+    // If SDA is low, toggle SCL until the slave releases it
+    int pulses = 0;
+    while (!(GPIOC->IDR & (1 << 9)) && pulses < 20) {
+        GPIOA->ODR &= ~(1 << 8); // SCL Low
+        for(volatile int i=0; i<500; i++); // Wait for rise/fall
+        GPIOA->ODR |= (1 << 8);  // SCL High
+        for(volatile int i=0; i<500; i++);
+        pulses++;
+    }
 
+    // 3. Generate a manual STOP condition (SDA goes high while SCL is high)
+    GPIOA->ODR &= ~(1 << 8); // SCL Low
+    GPIOC->ODR &= ~(1 << 9); // SDA Low
+    for(volatile int i=0; i<500; i++);
+    GPIOA->ODR |= (1 << 8);  // SCL High
+    for(volatile int i=0; i<500; i++);
+    GPIOC->ODR |= (1 << 9);  // SDA High (STOP!)
 
-	//write 1 to ODR
-	GPIOA->ODR |= (1<<8);
-	GPIOC->ODR |= (1<<9);
+    // 4. Re-configure AF correctly
+    // Clear the 4-bit fields first!
+    GPIOA->AFR[1] &= ~(0xF << (0 * 4)); // Clear AFH bit field for Pin 8
+    GPIOA->AFR[1] |=  (4 << (0 * 4));   // Set to AF4 (I2C3)
 
-	//check sclk and sda idr are high..wait while low
-	while(!(GPIOA->IDR & (1<<8))){;};
-	while(!(GPIOC->IDR & (1<<9))){
-		for (int i = 0; i < 15; i++)
-		{
-		GPIOA->ODR &= ~(1<<8); //toggle clock in bursts of 15 til sda is released. this works!
-		GPIOA->ODR |= (1<<8);
-		}
-	};
+    GPIOC->AFR[1] &= ~(0xF << (1 * 4)); // Clear AFH bit field for Pin 9
+    GPIOC->AFR[1] |=  (4 << (1 * 4));   // Set to AF4 (I2C3)
 
-	// Configure the SDA I/O as General Purpose Output Open-Drain, Low level (Write 0 to
-	//GPIOx_ODR).
-	GPIOC->ODR &= ~(1<<9);
-	//check its low, ie wait while high
-	while(GPIOC->IDR & (1<<9)){;};
+    // Set pins back to Alternate Function mode
+    GPIOA->MODER = (GPIOA->MODER & ~GPIO_MODER_MODER8) | GPIO_MODER_MODER8_1;
+    GPIOC->MODER = (GPIOC->MODER & ~GPIO_MODER_MODER9) | GPIO_MODER_MODER9_1;
 
-	// Configure the SCLK I/O as General Purpose Output Open-Drain, Low level (Write 0 to
-	//GPIOx_ODR).
-	GPIOA->ODR &= ~(1<<8);
-	//check its low, ie wait while high
-	while(GPIOA->IDR & (1<<8)){;};
+    // 5. Hardware Reset I2C
+    I2C3->CR1 |= I2C_CR1_SWRST;
+    for(volatile int i=0; i<100; i++);
+    I2C3->CR1 &= ~I2C_CR1_SWRST;
 
-	// Configure the SCLK I/O as General Purpose Output Open-Drain, High level (Write 1 to
-	//GPIOx_ODR).
-	GPIOA->ODR |= (1<<8);
-	//check its high, ie wait while low
-	while(!(GPIOA->IDR & (1<<8))){;};
-
-	// Configure the SDA I/O as General Purpose Output Open-Drain, High level (Write 1 to
-	//GPIOx_ODR).
-	GPIOC->ODR |= (1<<9);
-	//check its high, ie wait while low
-	while(!(GPIOC->IDR & (1<<9))){;};
-
-	//configure sda and sclk as af od.
-
-	//GPIOA8 TO AF
-	GPIOA->MODER |= GPIO_MODER_MODER8_1;
-	GPIOA->MODER &= ~GPIO_MODER_MODER8_0;
-
-	//GPIOC9 TO AF
-	GPIOC->MODER |= GPIO_MODER_MODER9_1;
-	GPIOC->MODER &= ~GPIO_MODER_MODER9_0;
-
-	//AF INDEX FOR A8 TO I2C3SCL
-	// AFRH AF4, 0b100, 0x4.
-	GPIOA->AFR[1] |= GPIO_AFRH_AFRH0_2;
-	//AF INDEX FOR C9 TO I2C3SDA
-	// AFRH AF4, 0b100, 0x4.
-	GPIOC->AFR[1] |= GPIO_AFRH_AFRH1_2;
-
-	//sw reset
-	I2C3->CR1 |= I2C_CR1_SWRST;
-	I2C3->CR1 &= ~I2C_CR1_SWRST;
-
-	//enable pe
-	I2C3->CR1 |= I2C_CR1_PE;
-
-	//more from stack exchange... https://electronics.stackexchange.com/questions/272427/stm32-busy-flag-is-set-after-i2c-initialization
+    I2C3->CR1 |= I2C_CR1_PE; // Enable I2C3
 }
-
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
 void stmpe811_TS_Start(uint8_t DeviceAddr)
 {
 	uint8_t uc_Mode;
@@ -749,8 +736,15 @@ void stmpe811_TS_Start(uint8_t DeviceAddr)
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_FRACT_XYZ, 0x01);
 	// SET RECHARGE LIMIT FOR TSC PINS 50mA
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_I_DRIVE, 0x01);
+
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_INT_EN, 1<<0); //touch detected interrupt
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_INT_EN, 1<<1); //fifo threshold detetcted
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_INT_CTRL, 1<<0); //global interrupt active
+	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_INT_CTRL, 1<<1); //interrupt type edge
+
+
 	//tsc op mode z only. bits 3:1 to 0b100
-	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL, REG_TSC_CTRL_OP_MODE_Z_ONLY);
+	//I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL, REG_TSC_CTRL_OP_MODE_Z_ONLY);
 	//ENABLE TSC
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL, 0x01);
 	//CLEAR ALL STATUS PENDING BITS IF ANY
@@ -759,6 +753,81 @@ void stmpe811_TS_Start(uint8_t DeviceAddr)
 	HAL_Delay(2);
 }
 
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
+void STMPE811_Init_Interrupts(void)
+{
+    // 1. Reset the sensor
+    STMPE811_Write_Reg_Safe(0x03, 0x01); // SYS_CTRL1: Soft Reset
+    for(volatile int i=0; i<100000; i++); // Wait for reset
+    STMPE811_Write_Reg_Safe(0x03, 0x00); // Release Reset
+
+    // 2. Enable TSC and ADC
+    STMPE811_Write_Reg_Safe(0x04, 0x00); // SYS_CTRL2: All blocks ON
+
+    // 3. Configure Interrupts
+    // Register 0x09: INT_CTRL
+    // Bit 2: Polarity (0=Active Low), Bit 1: Type (0=Level), Bit 0: Global Enable (1)
+    STMPE811_Write_Reg_Safe(0x09, 0x01);
+
+    // Register 0x08: INT_EN
+    // Bit 0: Touch Detect Enable
+    STMPE811_Write_Reg_Safe(0x08, 0x01);
+
+    // 4. Configure Touchscreen Controller
+    STMPE811_Write_Reg_Safe(0x41, 0x01); // TSC_CTRL: Enable TSC
+
+    // 5. Clear any pending interrupts on the sensor
+    STMPE811_Write_Reg_Safe(0x0B, 0xFF); // INT_STA: Write 1 to clear all
+}
+
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
+void Touch_Interrupt_Init(void) {
+    // 1. Enable Clock for GPIOA and SYSCFG
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+
+    // 2. PA15 is JTAG JTDI by default. We must set it to Input mode.
+    // This effectively "reclaims" the pin from the debugger.
+    GPIOA->MODER &= ~(3 << (15 * 2)); // 00 = Input Mode
+
+    // 2.5. PA15: bits 31:30 should be 01 (Pull-up)
+    GPIOA->PUPDR &= ~(3 << 30);
+    GPIOA->PUPDR |=  (1 << 30);
+    // 3. Configure the EXTI line for PA15
+    // EXTI15 is in External Interrupt Configuration Register 4 (EXTICR[3])
+    SYSCFG->EXTICR[3] &= ~SYSCFG_EXTICR4_EXTI15;     // Clear bits
+    SYSCFG->EXTICR[3] |= SYSCFG_EXTICR4_EXTI15_PA;  // Map PA15 to EXTI15
+
+    // Force Falling Edge only
+    EXTI->FTSR |= EXTI_FTSR_TR15;
+    EXTI->RTSR &= ~EXTI_RTSR_TR15;
+
+    // 4. Configure EXTI Line 15
+    EXTI->IMR  |= EXTI_IMR_MR15;   // Unmask Line 15
+    EXTI->FTSR |= EXTI_FTSR_TR15;  // Trigger on Falling Edge
+
+    // 5. Enable the shared EXTI15_10 Interrupt in NVIC
+    NVIC_SetPriority(EXTI15_10_IRQn, 2);
+    NVIC_EnableIRQ(EXTI15_10_IRQn);
+}
+
+
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
 void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin)
 {
 	uint8_t tmp = 0;
@@ -769,7 +838,12 @@ void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin)
 	//and write it back
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_TO_AF, tmp);
 }
-
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
 void Touch_Init(uint8_t DeviceAddr)
 {
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_OFF);
@@ -791,7 +865,7 @@ uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr)
 	uint8_t uc_Touched = 0;
 	//read touch status, check status of z bit
 	uc_State = ((I2C_Read_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL) & REG_TSC__TS_CTRL_STATUS) == REG_TSC__TS_CTRL_STATUS);
-
+	uc_State_Watch = uc_State;
 	//BIT SET??
 	if (uc_State > 0)
 	{
@@ -804,7 +878,6 @@ uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr)
 	else
 	{
 		//no touch detected
-
 	}
 	return uc_Touched;
 
@@ -819,12 +892,21 @@ uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr)
 void Touch_Process (void)
 {
 	//has touch been detected
-	uint8_t uc_TouchDetected = stmpe811_TS_DetectTouch(STMPE811_DEVICE_ADDRESS);
-	if (uc_TouchDetected)
-	{
-		//increment touch count, fetch x/y
-		ul_TouchCount++;
-		stmpe811_TS_GetXY(&us_TouchPointX, &us_TouchPointY);
+	//uc_TouchDetected = stmpe811_TS_DetectTouch(STMPE811_DEVICE_ADDRESS);
+	if (uc_TouchDetected || (GPIOA->IDR & (1 << 15)) == 0) {
+		uc_TouchDetected = 0;
+
+	    if (stmpe811_TS_GetXY(&us_TouchPointX, &us_TouchPointY) != 0) {
+	        // 1. Unstick the physical bus (The SCL toggle)
+	        ReleaseSerialBus();
+
+	        // 2. Re-configure the timing/speed (Since SWRST cleared it)
+	        my_I2C3_Init();
+
+	        // 3. Clear the sensor's internal "sticky" interrupt
+	        // (Use a simple non-DMA write if possible)
+	        STMPE811_Write_Reg_Safe(0x0B, 0xFF);
+	    }
 	}
 }
 
@@ -835,29 +917,115 @@ void Touch_Process (void)
  * @param
  * @retval
  */
-void stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
+uint8_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
 {
 	uint8_t dataXYZ[4] = {0};
 	uint32_t uldataXYZ;
+	uint8_t status = 0;
 
-	//read required regs
-//	for (int i = 0; i< sizeof(dataXYZ); i++)
-//	{
-//		dataXYZ[i] = I2C_Read_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC);
-//	}
-	I2C_Read_Via_DMA(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
-
+	status = I2C_Read_Via_DMA(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
+	if (status != 0) {
+		// If the I2C setup failed (NACK/Timeout), we MUST exit
+		// so the CPU can try again on the next touch.
+		I2C3->CR1 |= I2C_CR1_STOP;
+	}
 	//calc pos and values
 	uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3] << 0);
 	*X = (uldataXYZ >> 20) & 0x00000FFF;
 	*Y = (uldataXYZ >> 8) & 0x00000FFF;
-	//reset fifo
-	//I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x01);
-	//enable fifo again
-	//I2C_Write_1Byte(STMPE811_DEVICE_ADDRESS, STMPE811_REG_FIFO_STA, 0x00);
-
+	return status;
 }
 
+int8_t get_xy_safe(uint16_t *X, uint16_t *Y) {
+    uint8_t dataXYZ[4] = {0};
+    uint32_t uldataXYZ;
+
+    // 1. Safety Check: Is the bus physically capable of starting?
+    uint32_t timeout = 50000;
+    while ((I2C3->SR2 & I2C_SR2_BUSY) && --timeout);
+
+    if (timeout == 0) {
+        // BUS IS PHYSICALLY HUNG
+        ReleaseSerialBus(); // Reset I2C3 hardware
+        return -1;
+    }
+
+    // 2. Call the DMA Read (This function handles the Start/Address/DMA setup)
+    int8_t status = I2C_Read_Via_DMA(0x41, 0xD7, dataXYZ, 4);
+
+    if (status != 0) {
+        return status; // Exit early if NACK/Fail
+    }
+
+    // 3. WAIT for DMA to finish (Since you're in the main loop)
+    timeout = 100000;
+    while(g_I2C_TransferComplete == 0 && --timeout);
+
+    if (timeout == 0) {
+        return -2; // DMA never finished
+    }
+    g_I2C_TransferComplete = 0; // Reset for next time
+
+    // 4. Data Processing
+    uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3]);
+    *X = (uldataXYZ >> 20) & 0xFFF;
+    *Y = (uldataXYZ >> 8) & 0xFFF;
+
+    return 0;
+}
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
+// Helper to check for errors during address phases
+static enum AddrError I2C_Wait_Addr_With_Timeout(void) {
+    uint32_t timeout = 100000;
+    if (I2C3->SR1 & I2C_SR1_AF) I2C3->SR1 &= ~I2C_SR1_AF; //if af was set in previous failed transfer, then clear it here
+    while (!(I2C3->SR1 & I2C_SR1_ADDR)) {
+        // If the Slave NACKs, the AF bit sets
+        if (I2C3->SR1 & I2C_SR1_AF) {
+            I2C3->SR1 &= ~I2C_SR1_AF; // Clear the error flag
+            I2C3->CR1 |= I2C_CR1_STOP; // Release the bus
+            return Nack; // Error: No Acknowledge
+        }
+        if (--timeout == 0) return Timeout; // Error: Timeout
+    }
+    return Success; // Success
+}
+
+
+
+/****************************
+ * @brief
+ *
+ * @param
+ * @retval
+ */
+void EXTI15_10_IRQHandler(void) {
+    // Check if the interrupt came from Line 15
+    if (EXTI->PR & EXTI_PR_PR15) {
+
+        // 1. Clear the EXTI pending bit (Write 1 to clear)
+        EXTI->PR = EXTI_PR_PR15;
+        uc_TouchDetected = 1;
+    }
+    else
+    {
+    	//uc_TouchDetected = 0;
+    }
+}
+
+void STMPE811_Emergency_Clear(void) {
+    // Manually write to the interrupt status register to force release of PA15
+    // Using your "Safe Write" function from earlier
+    STMPE811_Write_Reg_Safe(0x0B, 0xFF);
+
+    // Also, clear the STM32's EXTI pending bit one more time
+    // to catch any "ghost" edges caused by the reset
+    EXTI->PR = EXTI_PR_PR15;
+}
 
 /* USER CODE END 4 */
 
@@ -869,7 +1037,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
+  //__disable_irq();
   while (1)
   {
   }

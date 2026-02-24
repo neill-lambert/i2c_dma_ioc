@@ -41,11 +41,13 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
-
+extern volatile uint8_t g_I2C_TransferComplete;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
+extern uint8_t STMPE811_Read_Reg_Simple(uint8_t reg);
+extern uint8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value);
 
 /* USER CODE END PFP */
 
@@ -208,10 +210,33 @@ void DMA1_Stream2_IRQHandler(void)
   /* USER CODE BEGIN DMA1_Stream2_IRQn 0 */
 	if((DMA1->LISR)&DMA_LISR_TCIF2)
 			{
-			//finished=1;
-			//log_debug("I2C finished receiving using DMA1_Stream2");
-			I2C3->CR1 |= I2C_CR1_STOP;
-			DMA1->LIFCR=DMA_LIFCR_CTCIF2;
+			DMA1->LIFCR = DMA_LIFCR_CTCIF2; // Clear flag
+	        // CRITICAL: Generate STOP now.
+	        // The 'LAST' bit sent the NACK, now we release the bus.
+	        I2C3->CR1 |= I2C_CR1_STOP;
+	        I2C3->CR2 &= ~I2C_CR2_DMAEN;    // Disable DMA requests
+	        STMPE811_Write_Reg_Safe(0x0B, 0xFF);
+	        // 2. WAIT for the line to physically settle to HIGH
+			// This is a few microseconds for the pull-up to fight the capacitance
+			uint32_t timeout = 2000;
+			while(!(GPIOA->IDR & (1 << 15)) && --timeout);
+
+	        STMPE811_Write_Reg_Safe(0x4B, 0x01); //reset fifo
+	        int var = (STMPE811_Read_Reg_Simple(0x4C)); //read fifo to check empty
+	        STMPE811_Write_Reg_Safe(0x4B, 0x00); // fifo Normal Mode
+
+			// 5. CRITICAL: Clear STM32 Pending bit AGAIN
+			// This clears any edge that occurred while we were busy
+			EXTI->PR = EXTI_PR_PR15;
+			// 4. Re-enable the NVIC interrupt just in case
+			NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
+			NVIC_EnableIRQ(EXTI15_10_IRQn);
+
+	        g_I2C_TransferComplete = 1;     // SIGNAL MAIN THREAD
+
+	        // Force the sensor to re-evaluate the interrupt line
+	        STMPE811_Write_Reg_Safe(0x09, 0x01); // Re-enable Global Interrupts (INT_CTRL)
+	        // TransferCompleteCallback();  // User logic here
 			}
 	if((DMA1->LISR)&DMA_LISR_HTIF2)
 			{
@@ -241,6 +266,7 @@ void DMA1_Stream4_IRQHandler(void)
 			{
 			//log_debug("I2C finished transmiting using DMA1_Stream6");
 			//finished=1;
+			I2C3->CR1 &= ~I2C_CR1_ACK;	//ack disable before unsetting addr
 			I2C3->CR1 |= I2C_CR1_STOP;
 			DMA1->HIFCR=DMA_HIFCR_CTCIF4;
 
