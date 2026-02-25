@@ -94,11 +94,13 @@ DMA_HandleTypeDef hdma_i2c3_tx;
 /* USER CODE BEGIN PV */
 //touch info
 uint16_t us_TouchPointX, us_TouchPointY; 		//x/y locations
-uint32_t ul_TouchCount;		// number of touch events
 uint8_t uc_TouchDetected;
-uint8_t	uc_State_Watch = 0;
-uint16_t RCounter = 0;
 volatile uint8_t g_I2C_TransferComplete = 0;
+// Global Statistics
+volatile uint32_t stats_TotalTouches = 0;
+volatile uint32_t stats_I2C_Recoveries = 0;
+volatile uint32_t stats_DMA_Timeouts = 0;
+volatile uint32_t stats_StuckPinKicks = 0; // When IDR was low but no EXTI fired
 enum AddrError myErr;
 /* USER CODE END PV */
 
@@ -120,6 +122,8 @@ void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin);
 void Touch_Init(uint8_t DeviceAddr);
 uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr);
 uint8_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y);
+int8_t get_xy_safe(uint16_t *X, uint16_t *Y);
+
 void Touch_Process (void);
 static enum AddrError I2C_Wait_Addr_With_Timeout(void);
 void Touch_Interrupt_Init(void);
@@ -127,7 +131,6 @@ uint8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value);
 uint8_t STMPE811_Read_Reg_Simple(uint8_t reg);
 void STMPE811_Init_Interrupts(void);
 void STMPE811_Emergency_Clear(void);
-int8_t get_xy_safe(uint16_t *X, uint16_t *Y);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -643,9 +646,9 @@ uint8_t STMPE811_Read_Reg_Simple(uint8_t reg)
  * @retval
  */
 void ReleaseSerialBus(void) {
-    uint32_t timeout = 10000;
-    RCounter++;
+    stats_I2C_Recoveries++; // Increment our "Glitch" counter
 
+    //uint32_t timeout = 10000;
     I2C3->CR1 &= ~I2C_CR1_PE; // Disable peripheral
 
     // 1. Set SCL (A8) and SDA (C9) to Open Drain Output
@@ -865,8 +868,6 @@ uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr)
 	uint8_t uc_Touched = 0;
 	//read touch status, check status of z bit
 	uc_State = ((I2C_Read_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL) & REG_TSC__TS_CTRL_STATUS) == REG_TSC__TS_CTRL_STATUS);
-	uc_State_Watch = uc_State;
-	//BIT SET??
 	if (uc_State > 0)
 	{
 		if(I2C_Read_1Byte(DeviceAddr, STMPE811_REG_FIFO_SIZE) > 0)
@@ -891,22 +892,30 @@ uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr)
  */
 void Touch_Process (void)
 {
-	//has touch been detected
-	//uc_TouchDetected = stmpe811_TS_DetectTouch(STMPE811_DEVICE_ADDRESS);
-	if (uc_TouchDetected || (GPIOA->IDR & (1 << 15)) == 0) {
+	if (uc_TouchDetected || (!(GPIOA->IDR & (1 << 15))))
+	{
+		if (!(GPIOA->IDR & (1 << 15)) && !uc_TouchDetected)
+		{
+			stats_StuckPinKicks++; // We caught a "missed" interrupt
+		}
+
 		uc_TouchDetected = 0;
+		stats_TotalTouches++;
 
-	    if (stmpe811_TS_GetXY(&us_TouchPointX, &us_TouchPointY) != 0) {
-	        // 1. Unstick the physical bus (The SCL toggle)
-	        ReleaseSerialBus();
 
-	        // 2. Re-configure the timing/speed (Since SWRST cleared it)
-	        my_I2C3_Init();
+		if (stmpe811_TS_GetXY(&us_TouchPointX, &us_TouchPointY) != 0)
+		{
+			stats_DMA_Timeouts++;
+			// 1. Unstick the physical bus (The SCL toggle)
+			ReleaseSerialBus();
 
-	        // 3. Clear the sensor's internal "sticky" interrupt
-	        // (Use a simple non-DMA write if possible)
-	        STMPE811_Write_Reg_Safe(0x0B, 0xFF);
-	    }
+			// 2. Re-configure the timing/speed (Since SWRST cleared it)
+			my_I2C3_Init();
+
+			// 3. Clear the sensor's internal "sticky" interrupt
+			// (Use a simple non-DMA write if possible)
+			STMPE811_Write_Reg_Safe(0x0B, 0xFF);
+		}
 	}
 }
 

@@ -211,7 +211,7 @@ void DMA1_Stream2_IRQHandler(void)
 	if((DMA1->LISR)&DMA_LISR_TCIF2)
 			{
 			DMA1->LIFCR = DMA_LIFCR_CTCIF2; // Clear flag
-	        // CRITICAL: Generate STOP now.
+	        // 1. CRITICAL: Generate STOP now.
 	        // The 'LAST' bit sent the NACK, now we release the bus.
 	        I2C3->CR1 |= I2C_CR1_STOP;
 	        I2C3->CR2 &= ~I2C_CR2_DMAEN;    // Disable DMA requests
@@ -222,10 +222,10 @@ void DMA1_Stream2_IRQHandler(void)
 			while(!(GPIOA->IDR & (1 << 15)) && --timeout);
 
 	        STMPE811_Write_Reg_Safe(0x4B, 0x01); //reset fifo
-	        int var = (STMPE811_Read_Reg_Simple(0x4C)); //read fifo to check empty
+	        (void)STMPE811_Read_Reg_Simple(0x4C); //read fifo to check empty
 	        STMPE811_Write_Reg_Safe(0x4B, 0x00); // fifo Normal Mode
 
-			// 5. CRITICAL: Clear STM32 Pending bit AGAIN
+			// 3. CRITICAL: Clear STM32 Pending bit AGAIN
 			// This clears any edge that occurred while we were busy
 			EXTI->PR = EXTI_PR_PR15;
 			// 4. Re-enable the NVIC interrupt just in case
@@ -234,9 +234,9 @@ void DMA1_Stream2_IRQHandler(void)
 
 	        g_I2C_TransferComplete = 1;     // SIGNAL MAIN THREAD
 
-	        // Force the sensor to re-evaluate the interrupt line
+	        // 5. Force the sensor to re-evaluate the interrupt line
 	        STMPE811_Write_Reg_Safe(0x09, 0x01); // Re-enable Global Interrupts (INT_CTRL)
-	        // TransferCompleteCallback();  // User logic here
+
 			}
 	if((DMA1->LISR)&DMA_LISR_HTIF2)
 			{
