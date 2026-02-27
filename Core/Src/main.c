@@ -22,7 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "stm32f429xx.h"
-//#include "stm32f4xx_hal_dma.h"
+#include "stm32f4xx_hal_dma.h"
 #include <math.h>
 
 /* USER CODE END Includes */
@@ -101,6 +101,7 @@ volatile uint32_t stats_TotalTouches = 0;
 volatile uint32_t stats_I2C_Recoveries = 0;
 volatile uint32_t stats_DMA_Timeouts = 0;
 volatile uint32_t stats_StuckPinKicks = 0; // When IDR was low but no EXTI fired
+
 enum AddrError myErr;
 /* USER CODE END PV */
 
@@ -155,7 +156,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  HAL_RCC_DeInit();
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -230,6 +231,8 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLN = 64;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 7;
+	HAL_StatusTypeDef HAL_result;                        // Have a variable to catch the result
+	HAL_result = HAL_RCC_OscConfig(&RCC_OscInitStruct);
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -929,7 +932,6 @@ void Touch_Process (void)
 uint8_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
 {
 	uint8_t dataXYZ[4] = {0};
-	uint32_t uldataXYZ;
 	uint8_t status = 0;
 
 	status = I2C_Read_Via_DMA(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
@@ -939,7 +941,7 @@ uint8_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
 		I2C3->CR1 |= I2C_CR1_STOP;
 	}
 	//calc pos and values
-	uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3] << 0);
+	uint32_t uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3] << 0);
 	*X = (uldataXYZ >> 20) & 0x00000FFF;
 	*Y = (uldataXYZ >> 8) & 0x00000FFF;
 	return status;
@@ -947,7 +949,6 @@ uint8_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
 
 int8_t get_xy_safe(uint16_t *X, uint16_t *Y) {
     uint8_t dataXYZ[4] = {0};
-    uint32_t uldataXYZ;
 
     // 1. Safety Check: Is the bus physically capable of starting?
     uint32_t timeout = 50000;
@@ -976,7 +977,7 @@ int8_t get_xy_safe(uint16_t *X, uint16_t *Y) {
     g_I2C_TransferComplete = 0; // Reset for next time
 
     // 4. Data Processing
-    uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3]);
+    uint32_t uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3]);
     *X = (uldataXYZ >> 20) & 0xFFF;
     *Y = (uldataXYZ >> 8) & 0xFFF;
 

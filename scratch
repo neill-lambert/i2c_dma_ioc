@@ -1,23 +1,160 @@
-ryo_i2c_dma_mem_write
+## Me
+after getting it going, i am now looking to tidy, refactor, optimize, and restructure the code.
 
-arguments.. i2c handle, devaddr, memaddr, memsize, pdata, sizedata
+## AI Assistant
 
-wait for halbusy flag reset, hal lock, I2C_CR1_PE enable,
-I2C_CR1_POS disable, HAL_DMA_Start_IT, 
+A practical refactor plan (without breaking what’s working)
+You’re at the “it works, now make it nice” stage—perfect time to separate concerns and make error-handling consistent.
+1) Restructure into modules (biggest readability win)
+Right now main.c mixes board bring-up, I2C low-level,
+DMA, touch controller driver, and application logic. I’d split into:
+bsp_i2c3.{c,h}
+Owns: GPIO init for I2C3 pins, I2C3 timing init, bus recovery (ReleaseSerialBus), low-level read/write helpers, DMA read helper, timeouts.
+stmpe811.{c,h}
+Owns: register map, init sequence, interrupt config, read XY, clear interrupt/fifo, etc.
+touch.{c,h} (optional)
+Owns: “application policy” like Touch_Process(), debounce/filtering, stats, retry strategy.
+Keep main.c as orchestration only (init + main loop).
+This makes it much easier to optimize later without turning main.c into spaghetti again.
+2) Standardize your “address + status + timeout” story
+You currently have multiple “status styles”:
+enum AddrError (good)
+functions returning uint8_t but using negative values (not good)
+multiple timeouts with magic numbers
+Refactor goal:
+use one status type (enum or int8_t) across driver layer
+use named constants for timeouts
+use one convention for I2C addresses (7-bit vs 8-bit)
+3) Keep ISRs minimal and deterministic
+Your DMA IRQ handler currently does a lot (including I2C transactions). Eventually you’ll want:
+ISR: clear flags, stop DMA/I2C safely, set a completion/error flag
+main loop: do sensor “cleanup” work (fifo reset, re-enable interrupts, etc.)
+That reduces ISR latency and makes race conditions easier to reason about.
 
-	RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+One high-impact fix to do immediately: stop returning negative values from uint8_t
+In your current code, STMPE811_Write_Reg_Safe() is declared uint8_t but returns -1, -2. That wraps to 255, 254 and makes error handling confusing/bug-prone.
+Below are minimal edits to make the return type consistent (int8_t) and update the related prototypes.
+Edit 1: STMPE811_Write_Reg_Safe return type + prototype cleanup``` c
+/* USER CODE BEGIN PTD */
+enum AddrError{
+	Success,
+	Timeout,
+	Nack
+};
+/* USER CODE END PTD */
 
+/* USER CODE BEGIN PFP */
+//void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c);
+void I2CTransfer ( void ); //unfinished xfer
+static void my_I2C3_Init(void);
+static void my_DMA_Init(void);
+static void my_GPIO_Init(void);
+uint8_t I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address);
+void I2C_Write_1Byte  (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t uc_Data);
+uint8_t  I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size); //used to read streams of data from peripheral. eg, x and y coordinates.
+void ReleaseSerialBus( void );
+void stmpe811_TS_Start(uint8_t DeviceAddr);
+void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin);
+void Touch_Init(uint8_t DeviceAddr);
+uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr);
+uint8_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y);
+int8_t get_xy_safe(uint16_t *X, uint16_t *Y);
 
-	//and also set nvic priority, and enable irq
+void Touch_Process (void);
+static enum AddrError I2C_Wait_Addr_With_Timeout(void);
+void Touch_Interrupt_Init(void);
+int8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value);
+uint8_t STMPE811_Read_Reg_Simple(uint8_t reg);
+void STMPE811_Init_Interrupts(void);
+void STMPE811_Emergency_Clear(void);
+/* USER CODE END PFP */
 
-	/*************>>>>>>> STEPS FOLLOWED <<<<<<<<************ ???
+// ... existing code ...
 
-	1. Enable the SYSCFG/AFIO bit in RCC register
-	2. Configure the EXTI configuration Register in the SYSCFG/AFIO
-	3. Disable the EXTI Mask using Interrupt Mask Register (IMR)
-	4. Configure the Rising Edge / Falling Edge Trigger
-	5. Set the Interrupt Priority
-	6. Enable the interrupt
+uint8_t  I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size) //used to read streams of data from peripheral. eg, x and y coordinates.
+{
+		uint8_t status = 0;
+	// 1. PREPARE DMA1 STREAM 2 (I2C3 RX)
+	    DMA1_Stream2->CR &= ~DMA_SxCR_EN;             // Disable to configure
+	    DMA1_Stream2->M0AR = (uint32_t)uc_pReadBuffer;   // Destination memory
+	    DMA1_Stream2->PAR  = (uint32_t)&I2C3->DR;      // Source peripheral
+	    DMA1_Stream2->NDTR = size;                    // Number of bytes
+	    DMA1_Stream2->CR &= ~DMA_SxCR_CHSEL; // Clear bits 25, 26, 27
+	    DMA1_Stream2->CR |= (3 << 25);       // Set to Channel 3
+	    DMA1_Stream2->CR  |= DMA_SxCR_MINC | DMA_SxCR_TCIE; // Mem Inc + Interrupt
+	    DMA1_Stream2->CR  &= ~DMA_SxCR_DIR;           // Dir: Peri -> Mem
 
-	*/
-	
+	    // ... existing code ...
+}
+
+// ... existing code ...
+
+int8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value)
+{
+    // 1. Start Condition
+    I2C3->CR1 |= I2C_CR1_START;
+    uint32_t timeout = 10000;
+    while (!(I2C3->SR1 & I2C_SR1_SB) && --timeout);
+    if (timeout == 0) return -2;
+
+    // 2. Device Address (Write)
+    I2C3->DR = (0x41 << 1); // 7-bit 0x41 shifted
+    if (I2C_Wait_Addr_With_Timeout() != 0) return -1;
+    (void)I2C3->SR2; // Clear ADDR flag
+
+    // 3. Send Register Address
+    I2C3->DR = reg;
+    timeout = 10000;
+    while (!(I2C3->SR1 & I2C_SR1_TXE) && --timeout);
+    if (I2C3->SR1 & I2C_SR1_AF) goto nack_recovery;
+
+    // 4. Send Data Value
+    I2C3->DR = value;
+    timeout = 10000;
+    while (!(I2C3->SR1 & I2C_SR1_BTF) && --timeout);
+    if (I2C3->SR1 & I2C_SR1_AF) goto nack_recovery;
+
+    // 5. Stop Condition
+    I2C3->CR1 |= I2C_CR1_STOP;
+    return 0;
+
+nack_recovery:
+    I2C3->SR1 &= ~I2C_SR1_AF;
+    I2C3->CR1 |= I2C_CR1_STOP;
+    return -1;
+}
+
+// ... existing code ...
+```
+
+Edit 2: fix the extern declaration used by the ISR file``` c
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN PFP */
+extern uint8_t STMPE811_Read_Reg_Simple(uint8_t reg);
+extern int8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value);
+
+/* USER CODE END PFP */
+
+// ... existing code ...
+```
+
+That’s a correctness fix and it makes later refactors smoother.
+
+Next tidy steps I’d do (small, safe, and worth it)
+Remove unused includes (math.h looks unused here).
+Replace magic numbers like 100000 with named constants:
+I2C_ADDR_TIMEOUT_TICKS
+DMA_WAIT_TICKS
+BUSY_WAIT_TICKS
+Normalize address constants:
+define STMPE811_ADDR_7BIT and derive the R/W byte when writing to DR
+Make shared flags explicitly volatile and single-purpose:
+volatile uint8_t g_I2C_TransferComplete
+optionally add volatile uint8_t g_I2C_TransferError
+
+One question to target the refactor correctly
+Do you want to keep this register-level style long-term (fast, explicit), or migrate parts back toward
+HAL for maintainability?
+If you want register-level: I’ll propose a clean “BSP + driver” layering and a tiny event/state machine for I2C/DMA.
+If you want HAL: I’ll outline how to let HAL own the peripheral init + DMA, while you keep your bus-recovery logic.
+Tell me your preference and whether you’re aiming primarily for reliability, latency, or code cleanliness (you can pick more than one).
