@@ -22,6 +22,8 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "stm32f4xx_hal.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,12 +44,14 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
 extern volatile uint8_t g_I2C_TransferComplete;
+extern volatile uint32_t ul_g_ms_ticks;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
-extern uint8_t STMPE811_Read_Reg_Simple(uint8_t reg);
-extern uint8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value);
+
+
 
 /* USER CODE END PFP */
 
@@ -187,9 +191,9 @@ void PendSV_Handler(void)
 void SysTick_Handler(void)
 {
   /* USER CODE BEGIN SysTick_IRQn 0 */
-
+    ul_g_ms_ticks++;
+    HAL_IncTick();
   /* USER CODE END SysTick_IRQn 0 */
-  HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
 
   /* USER CODE END SysTick_IRQn 1 */
@@ -215,22 +219,24 @@ void DMA1_Stream2_IRQHandler(void)
 	        // The 'LAST' bit sent the NACK, now we release the bus.
 	        I2C3->CR1 |= I2C_CR1_STOP;
 	        I2C3->CR2 &= ~I2C_CR2_DMAEN;    // Disable DMA requests
-	        STMPE811_Write_Reg_Safe(0x0B, 0xFF);
-	        // 2. WAIT for the line to physically settle to HIGH
-			// This is a few microseconds for the pull-up to fight the capacitance
-			uint32_t timeout = 2000;
-			while(!(GPIOA->IDR & (1 << 15)) && --timeout);
+	        DMA1_Stream2->CR &= ~DMA_SxCR_EN;    // Disable stream (optional but helps robustness)
 
-	        STMPE811_Write_Reg_Safe(0x4B, 0x01); //reset fifo
-	        (void)STMPE811_Read_Reg_Simple(0x4C); //read fifo to check empty
-	        STMPE811_Write_Reg_Safe(0x4B, 0x00); // fifo Normal Mode
-
-			// 3. CRITICAL: Clear STM32 Pending bit AGAIN
-			// This clears any edge that occurred while we were busy
-			EXTI->PR = EXTI_PR_PR15;
-			// 4. Re-enable the NVIC interrupt just in case
-			NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
-			NVIC_EnableIRQ(EXTI15_10_IRQn);
+	  //       STMPE811_Write_Reg_Safe(0x0B, 0xFF);
+	  //       // 2. WAIT for the line to physically settle to HIGH
+			// // This is a few microseconds for the pull-up to fight the capacitance
+			// uint32_t timeout = 2000;
+			// while(!(GPIOA->IDR & (1 << 15)) && --timeout);
+	  //
+	  //       STMPE811_Write_Reg_Safe(0x4B, 0x01); //reset fifo
+	  //       STMPE811_Read_Reg_Simple(0x4C); //read fifo to check empty
+	  //       STMPE811_Write_Reg_Safe(0x4B, 0x00); // fifo Normal Mode
+	  //
+			// // 3. CRITICAL: Clear STM32 Pending bit AGAIN
+			// // This clears any edge that occurred while we were busy
+			// EXTI->PR = EXTI_PR_PR15;
+			// // 4. Re-enable the NVIC interrupt just in case
+			// NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
+			// NVIC_EnableIRQ(EXTI15_10_IRQn);
 
 	        g_I2C_TransferComplete = 1;     // SIGNAL MAIN THREAD
 

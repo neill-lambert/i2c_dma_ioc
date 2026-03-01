@@ -1,5 +1,6 @@
 ../Drivers/CMSIS/Include/core_cm4.h:1684:22:__NVIC_EnableIRQ	2
 ../Drivers/CMSIS/Include/core_cm4.h:1775:22:__NVIC_ClearPendingIRQ	2
+../Core/Inc/main.h:48:22:i2c_status_str	6
 ../Core/Src/stm32f4xx_it.c:73:6:NMI_Handler	1
 ../Core/Src/stm32f4xx_it.c:88:6:HardFault_Handler	1
 ../Core/Src/stm32f4xx_it.c:103:6:MemManage_Handler	1

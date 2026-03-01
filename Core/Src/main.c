@@ -29,11 +29,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-enum AddrError{
-	Success,
-	Timeout,
-	Nack
-};
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -95,41 +91,37 @@ DMA_HandleTypeDef hdma_i2c3_tx;
 //touch info
 uint16_t us_TouchPointX, us_TouchPointY; 		//x/y locations
 uint8_t uc_TouchDetected;
-volatile uint8_t g_I2C_TransferComplete = 0;
+volatile uint8_t g_I2C_TransferComplete;
 // Global Statistics
 volatile uint32_t stats_TotalTouches = 0;
 volatile uint32_t stats_I2C_Recoveries = 0;
 volatile uint32_t stats_DMA_Timeouts = 0;
 volatile uint32_t stats_StuckPinKicks = 0; // When IDR was low but no EXTI fired
 
-enum AddrError myErr;
+volatile uint32_t ul_g_ms_ticks = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 
 /* USER CODE BEGIN PFP */
-//void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c);
-void I2CTransfer ( void ); //unfinished xfer
+static void delay_ms(uint32_t ms);
+void stmpe811_TS_Start(uint8_t DeviceAddr);
 static void my_I2C3_Init(void);
 static void my_DMA_Init(void);
 static void my_GPIO_Init(void);
 uint8_t I2C_Read_1Byte (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address);
 void I2C_Write_1Byte  (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t uc_Data);
-uint8_t  I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size); //used to read streams of data from peripheral. eg, x and y coordinates.
+i2c_status_t I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, const uint8_t *uc_pReadBuffer, uint8_t size);
 void ReleaseSerialBus( void );
-void stmpe811_TS_Start(uint8_t DeviceAddr);
 void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin);
 void Touch_Init(uint8_t DeviceAddr);
 uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr);
-uint8_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y);
-int8_t get_xy_safe(uint16_t *X, uint16_t *Y);
-
+i2c_status_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y);
 void Touch_Process (void);
-static enum AddrError I2C_Wait_Addr_With_Timeout(void);
+static i2c_status_t  I2C_Wait_Addr_With_Timeout(void);
 void Touch_Interrupt_Init(void);
-uint8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value);
-uint8_t STMPE811_Read_Reg_Simple(uint8_t reg);
 void STMPE811_Init_Interrupts(void);
 void STMPE811_Emergency_Clear(void);
 /* USER CODE END PFP */
@@ -192,12 +184,7 @@ int main(void)
   while (1)
   {
 	  Touch_Process();
-//	  if ( (GPIOA->IDR & (1 << 15)) == 0 ) {
-//	      // If you see the code enter here during a touch,
-//	      // it means the EXTI hardware is the problem.
-//	      // If it NEVER enters here, the sensor is the problem.
-//	  }
-	  asm("nop");
+	  __asm volatile("nop");
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -510,9 +497,20 @@ void I2C_Write_1Byte  (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t u
  * @param
  * @retval
  */
-uint8_t  I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8_t *uc_pReadBuffer, uint8_t size) //used to read streams of data from peripheral. eg, x and y coordinates.
+i2c_status_t  I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, const uint8_t *uc_pReadBuffer, uint8_t size) //used to read streams of data from peripheral. eg, x and y coordinates.
 {
-		uint8_t status = 0;
+	i2c_status_t status = I2C_OK;
+
+	// Always start with a known completion state (prevents “missed IRQ” hangs/false completes)
+	g_I2C_TransferComplete = 0;
+
+	/* Optional but very useful: detect a physically hung BUSY before we start */
+	uint32_t busy_timeout = 200000;
+	while ((I2C3->SR2 & I2C_SR2_BUSY) && --busy_timeout) { __asm volatile ("nop"); }
+	if (busy_timeout == 0U)
+	{
+		return I2C_ERR_BUS_HUNG;
+	}
 	// 1. PREPARE DMA1 STREAM 2 (I2C3 RX)
 	    DMA1_Stream2->CR &= ~DMA_SxCR_EN;             // Disable to configure
 	    DMA1_Stream2->M0AR = (uint32_t)uc_pReadBuffer;   // Destination memory
@@ -540,36 +538,36 @@ uint8_t  I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8
 	    I2C3->CR1 |= I2C_CR1_START;
 	    while (!(I2C3->SR1 & I2C_SR1_SB));
 	    I2C3->DR = (uc_Dev_Address) | 0x01;          // Send Slave Addr (Read)
-	    if ((status = I2C_Wait_Addr_With_Timeout()))
+	    status = I2C_Wait_Addr_With_Timeout();
+		if (status != I2C_OK)
 	  	    {
-	  	    	return status; //either nack or timeout
-	  	    }	    //stmpe811_TS_Start
+	  	    	return status;
+	  	    }
+
 	    // 4. PHASE 3: Handover to DMA
 	    I2C3->CR1 |= I2C_CR1_ACK;						//enable ack before clearing addr
 	    I2C3->CR2 |= I2C_CR2_LAST;                    // Auto-NACK on last DMA byte
 	    DMA1_Stream2->NDTR = size;                    // Number of bytes
 	    DMA1_Stream2->CR |= DMA_SxCR_EN;              // Start the DMA Stream
-	    //I2C3->CR1 &= ~I2C_CR1_POS;        // Ensure POS is cleared for standard NDTR transfers
 	    I2C3->CR2 |= I2C_CR2_DMAEN;                   // Enable I2C DMA requests
 	    (void) I2C3->SR1;
 	    (void) I2C3->SR2;  // read SR1 and SR2 to clear the ADDR bit
 
 	    //5. PHASE 4: wait for hardware to finish
 	    uint32_t timeout = 100000;
-	    while (g_I2C_TransferComplete == 0 && timeout--) {
-	    	asm("nop");
-	        // Add a tiny delay or NOP
-	    }
+	    while (g_I2C_TransferComplete == 0 && timeout--)
+	    	{
+	    	__asm volatile("nop");
+	        }
 
-	    if (timeout == 0)
+	    if (timeout == 0U)
 	    {
-	    	status = 1;
-	    	return status;
+	    	return I2C_ERR_DMA_TIMEOUT;
 	    	/* Handle Timeout */
 	    }
 
 	    g_I2C_TransferComplete = 0; // Reset for next time
-	    return status;
+	    return I2C_OK;
 }
 
 /****************************
@@ -578,18 +576,19 @@ uint8_t  I2C_Read_Via_DMA (uint8_t uc_Dev_Address, uint8_t uc_Reg_Address, uint8
  * @param
  * @retval
  */
-uint8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value)
+i2c_status_t STMPE811_Write_Reg_Safe(const uint8_t reg, const uint8_t value)
 {
     // 1. Start Condition
     I2C3->CR1 |= I2C_CR1_START;
     uint32_t timeout = 10000;
     while (!(I2C3->SR1 & I2C_SR1_SB) && --timeout);
-    if (timeout == 0) return -2;
+    if (timeout == 0U) return I2C_ERR_TIMEOUT;
 
-    // 2. Device Address (Write)
-    I2C3->DR = (0x41 << 1); // 7-bit 0x41 shifted
-    if (I2C_Wait_Addr_With_Timeout() != 0) return -1;
-    (void)I2C3->SR2; // Clear ADDR flag
+	// 2. Device Address (Write)
+	I2C3->DR = (0x41 << 1); // 7-bit 0x41 shifted
+	const i2c_status_t st = I2C_Wait_Addr_With_Timeout();
+	if (st != I2C_OK) return st;
+	(void)I2C3->SR2; // Clear ADDR flag
 
     // 3. Send Register Address
     I2C3->DR = reg;
@@ -601,26 +600,30 @@ uint8_t STMPE811_Write_Reg_Safe(uint8_t reg, uint8_t value)
     I2C3->DR = value;
     timeout = 10000;
     while (!(I2C3->SR1 & I2C_SR1_BTF) && --timeout);
+	if (timeout == 0U) goto timeout_recovery;
     if (I2C3->SR1 & I2C_SR1_AF) goto nack_recovery;
 
     // 5. Stop Condition
     I2C3->CR1 |= I2C_CR1_STOP;
-    return 0;
+    return I2C_OK;
 
 nack_recovery:
     I2C3->SR1 &= ~I2C_SR1_AF;
     I2C3->CR1 |= I2C_CR1_STOP;
-    return -1;
+    return I2C_ERR_NACK;
+timeout_recovery:
+    I2C3->CR1 |= I2C_CR1_STOP;
+    return I2C_ERR_TIMEOUT;
 }
 
-uint8_t STMPE811_Read_Reg_Simple(uint8_t reg)
+uint8_t STMPE811_Read_Reg_Simple(const uint8_t reg)
 {
-    // 1. Start & Address (Write mode to send reg address)
-    I2C3->CR1 |= I2C_CR1_START;
-    while (!(I2C3->SR1 & I2C_SR1_SB));
-    I2C3->DR = (0x41 << 1);
-    while (!(I2C3->SR1 & I2C_SR1_ADDR));
-    (void)I2C3->SR2; // Clear ADDR
+	// 1. Start & Address (Write mode to send reg address)
+	I2C3->CR1 |= I2C_CR1_START;
+	while (!(I2C3->SR1 & I2C_SR1_SB));
+	I2C3->DR = (0x41 << 1);
+	while (!(I2C3->SR1 & I2C_SR1_ADDR));
+	(void)I2C3->SR2; // Clear ADDR
 
     I2C3->DR = reg;
     while (!(I2C3->SR1 & I2C_SR1_BTF));
@@ -726,7 +729,7 @@ void stmpe811_TS_Start(uint8_t DeviceAddr)
 	//NB TEMP SENSOR NEEDED TO COMPENSATE TOUCH SCREEN PARAMS
 	//ADC IS USED FOR 4 WIRE TOUCH SCREEN OPERATION
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL2, uc_Mode);
-	// select sample time bit number adc ref
+	// select the sample time bit number adc ref
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_ADC_CTRL1, REG_ADC_CTRL1_12_BIT_ADC | REG_ADC_CTRL1_SAMPLE_TIME_80CLK);
 	//select adc clk speed 3.25mhz
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_ADC_CTRL2, REG_ADC_CTRL2_3_25MHZ);
@@ -756,7 +759,7 @@ void stmpe811_TS_Start(uint8_t DeviceAddr)
 	//CLEAR ALL STATUS PENDING BITS IF ANY
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_INT_STA, 0xFF);
 	//DELAY
-	HAL_Delay(2);
+	delay_ms(2);
 }
 
 /****************************
@@ -853,9 +856,9 @@ void stmpe811_IO_EnableAF(uint8_t DeviceAddr, uint8_t IO_Pin)
 void Touch_Init(uint8_t DeviceAddr)
 {
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_OFF);
-	HAL_Delay(10);
+	delay_ms(2);
 	I2C_Write_1Byte(DeviceAddr, STMPE811_REG_SYS_CTRL1, REG_SYS_CTRL1_SOFT_RESET_ON);
-	HAL_Delay(2);
+	delay_ms(2);
 	stmpe811_TS_Start(DeviceAddr);
 }
 
@@ -867,10 +870,10 @@ void Touch_Init(uint8_t DeviceAddr)
  */
 uint8_t stmpe811_TS_DetectTouch(uint8_t DeviceAddr)
 {
-	uint8_t uc_State;
 	uint8_t uc_Touched = 0;
 	//read touch status, check status of z bit
-	uc_State = ((I2C_Read_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL) & REG_TSC__TS_CTRL_STATUS) == REG_TSC__TS_CTRL_STATUS);
+	const uint8_t uc_State = ((I2C_Read_1Byte(DeviceAddr, STMPE811_REG_TSC_CTRL) & REG_TSC__TS_CTRL_STATUS) ==
+	                    REG_TSC__TS_CTRL_STATUS);
 	if (uc_State > 0)
 	{
 		if(I2C_Read_1Byte(DeviceAddr, STMPE811_REG_FIFO_SIZE) > 0)
@@ -906,18 +909,24 @@ void Touch_Process (void)
 		stats_TotalTouches++;
 
 
-		if (stmpe811_TS_GetXY(&us_TouchPointX, &us_TouchPointY) != 0)
-		{
+		i2c_status_t st = stmpe811_TS_GetXY(&us_TouchPointX, &us_TouchPointY);
+		if (st != I2C_OK)
+			{
 			stats_DMA_Timeouts++;
-			// 1. Unstick the physical bus (The SCL toggle)
 			ReleaseSerialBus();
-
-			// 2. Re-configure the timing/speed (Since SWRST cleared it)
 			my_I2C3_Init();
-
 			// 3. Clear the sensor's internal "sticky" interrupt
-			// (Use a simple non-DMA write if possible)
 			STMPE811_Write_Reg_Safe(0x0B, 0xFF);
+		}
+		else
+			{
+			// Do the “sensor cleanup” here (main context), not in the DMA ISR
+			STMPE811_Write_Reg_Safe(0x0B, 0xFF); // clear interrupt status
+			STMPE811_Write_Reg_Safe(0x4B, 0x01); // FIFO reset
+			STMPE811_Write_Reg_Safe(0x4B, 0x00); // FIFO normal mode
+
+			// Clear EXTI pending just in case an edge happened during I2C activity
+			EXTI->PR = EXTI_PR_PR15;
 		}
 	}
 }
@@ -929,60 +938,26 @@ void Touch_Process (void)
  * @param
  * @retval
  */
-uint8_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
+i2c_status_t stmpe811_TS_GetXY(uint16_t *X, uint16_t *Y)
 {
-	uint8_t dataXYZ[4] = {0};
-	uint8_t status = 0;
+	const uint8_t dataXYZ[4] = {0};
+	i2c_status_t status = I2C_OK;
 
 	status = I2C_Read_Via_DMA(STMPE811_DEVICE_ADDRESS, STMPE811_REG_TSC_DATA_NON_INC, dataXYZ, sizeof(dataXYZ));
-	if (status != 0) {
-		// If the I2C setup failed (NACK/Timeout), we MUST exit
-		// so the CPU can try again on the next touch.
+	if (status != I2C_OK)
+		{
+		// Ensure the bus is released on error paths too
 		I2C3->CR1 |= I2C_CR1_STOP;
+		return status;
 	}
 	//calc pos and values
-	uint32_t uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3] << 0);
-	*X = (uldataXYZ >> 20) & 0x00000FFF;
-	*Y = (uldataXYZ >> 8) & 0x00000FFF;
+	uint32_t ul_dataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3] << 0);
+	*X = (ul_dataXYZ >> 20) & 0x00000FFF;
+	*Y = (ul_dataXYZ >> 8) & 0x00000FFF;
 	return status;
 }
 
-int8_t get_xy_safe(uint16_t *X, uint16_t *Y) {
-    uint8_t dataXYZ[4] = {0};
 
-    // 1. Safety Check: Is the bus physically capable of starting?
-    uint32_t timeout = 50000;
-    while ((I2C3->SR2 & I2C_SR2_BUSY) && --timeout);
-
-    if (timeout == 0) {
-        // BUS IS PHYSICALLY HUNG
-        ReleaseSerialBus(); // Reset I2C3 hardware
-        return -1;
-    }
-
-    // 2. Call the DMA Read (This function handles the Start/Address/DMA setup)
-    int8_t status = I2C_Read_Via_DMA(0x41, 0xD7, dataXYZ, 4);
-
-    if (status != 0) {
-        return status; // Exit early if NACK/Fail
-    }
-
-    // 3. WAIT for DMA to finish (Since you're in the main loop)
-    timeout = 100000;
-    while(g_I2C_TransferComplete == 0 && --timeout);
-
-    if (timeout == 0) {
-        return -2; // DMA never finished
-    }
-    g_I2C_TransferComplete = 0; // Reset for next time
-
-    // 4. Data Processing
-    uint32_t uldataXYZ = (dataXYZ[0] << 24 | dataXYZ[1] << 16 | dataXYZ[2] << 8 | dataXYZ[3]);
-    *X = (uldataXYZ >> 20) & 0xFFF;
-    *Y = (uldataXYZ >> 8) & 0xFFF;
-
-    return 0;
-}
 /****************************
  * @brief
  *
@@ -990,7 +965,7 @@ int8_t get_xy_safe(uint16_t *X, uint16_t *Y) {
  * @retval
  */
 // Helper to check for errors during address phases
-static enum AddrError I2C_Wait_Addr_With_Timeout(void) {
+static i2c_status_t I2C_Wait_Addr_With_Timeout(void) {
     uint32_t timeout = 100000;
     if (I2C3->SR1 & I2C_SR1_AF) I2C3->SR1 &= ~I2C_SR1_AF; //if af was set in previous failed transfer, then clear it here
     while (!(I2C3->SR1 & I2C_SR1_ADDR)) {
@@ -998,11 +973,11 @@ static enum AddrError I2C_Wait_Addr_With_Timeout(void) {
         if (I2C3->SR1 & I2C_SR1_AF) {
             I2C3->SR1 &= ~I2C_SR1_AF; // Clear the error flag
             I2C3->CR1 |= I2C_CR1_STOP; // Release the bus
-            return Nack; // Error: No Acknowledge
+            return I2C_ERR_NACK; // Error: No Acknowledge
         }
-        if (--timeout == 0) return Timeout; // Error: Timeout
+        if (--timeout == 0) return I2C_ERR_TIMEOUT; // Error: Timeout
     }
-    return Success; // Success
+    return I2C_OK; // Success
 }
 
 
@@ -1035,6 +1010,15 @@ void STMPE811_Emergency_Clear(void) {
     // Also, clear the STM32's EXTI pending bit one more time
     // to catch any "ghost" edges caused by the reset
     EXTI->PR = EXTI_PR_PR15;
+}
+
+static void delay_ms(uint32_t ms)
+{
+	uint32_t start = ul_g_ms_ticks;
+	while ((uint32_t)(ul_g_ms_ticks - start) < ms)
+	{
+		__asm volatile ("nop");
+	}
 }
 
 /* USER CODE END 4 */
