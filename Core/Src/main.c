@@ -195,48 +195,62 @@ int main(void)
   * @brief System Clock Configuration
   * @retval None
   */
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
 void SystemClock_Config(void)
 {
-  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  // 1. Enable Power Controller Clock
+  RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+  
+  // 2. Set voltage regulator to Scale 3 (lower power consumption)
+  // PWR->CR bits [15:14] = 01 for SCALE3
+  PWR->CR = (PWR->CR & ~(0x3UL << 14)) | (0x1UL << 14);
 
-  /** Configure the main internal regulator output voltage
-  */
-  __HAL_RCC_PWR_CLK_ENABLE();
-  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+  // 3. Configure RCC Oscillators
+  // Enable HSI (Internal oscillator) - it's typically on by default
+  RCC->CR |= RCC_CR_HSION;
+  // Wait for HSI to stabilize
+  while (!(RCC->CR & RCC_CR_HSIRDY));
 
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 64;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 7;
-	HAL_StatusTypeDef HAL_result;                        // Have a variable to catch the result
-	HAL_result = HAL_RCC_OscConfig(&RCC_OscInitStruct);
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  // 4. Configure PLL
+  // First, disable PLL before configuring it
+  RCC->CR &= ~RCC_CR_PLLON;
+  while (RCC->CR & RCC_CR_PLLON);  // Wait for PLL to turn off
 
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV4;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+  // 5. Set Flash latency for the new clock frequency
+  // At 16 MHz HSI / 4 = 4 MHz, we need LATENCY_0
+  FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_2WS;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  // 6. Configure PLL for 64mhz:
+  // - Source: HSI (bit 22 = 0)
+  // - PLLM = 8   (bits 5:0)
+  // - PLLN = 64  (bits 14:6)
+  // - PLLP = 2   (bits 17:16 = 00 for /2)
+  // - PLLQ = 7   (bits 27:24)
+  RCC->PLLCFGR = (0 << 22)           // HSI as PLL source
+                | (8 << 0)            // PLLM = 8
+                | (64 << 6)           // PLLN = 64
+                | (0 << 16)           // PLLP = 2 (/2)
+                | (7 << 24);          // PLLQ = 7
+
+  // Enable PLL
+  RCC->CR |= RCC_CR_PLLON;
+  // Wait for PLL to lock
+  while (!(RCC->CR & RCC_CR_PLLRDY));
+
+  // 5. Configure AHB, APB1, APB2 prescalers and switch to PLL
+  // AHB  divider: /4   (bits 7:4 = 0101)
+  // APB1 divider: /1   (bits 12:10 = 000)
+  // APB2 divider: /2   (bits 15:13 = 001)
+  RCC->CFGR = (0 << 4)           // AHB prescaler = /1
+            | (4 << 10)           // APB1 prescaler = /2
+            | (0 << 13)           // APB2 prescaler = /1
+            | (2 << 0);           // SYSCLK source = PLL (bits 1:0 = 10)
+
+  // Wait for the clock switch to complete
+  while ((RCC->CFGR & RCC_CFGR_SWS) != (2 << 2));
 }
 
 
