@@ -23,7 +23,6 @@
 /* USER CODE BEGIN Includes */
 #include "stm32f429xx.h"
 #include "stm32f4xx_hal_dma.h"
-#include <math.h>
 
 /* USER CODE END Includes */
 
