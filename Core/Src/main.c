@@ -575,15 +575,16 @@ i2c_status_t STMPE811_Write_Reg_Safe(const uint8_t reg, const uint8_t value)
     // 3. Send Register Address
     I2C3->DR = reg;
     timeout = 10000;
-    while (!(I2C3->SR1 & I2C_SR1_TXE) && --timeout);
+    while (!(I2C3->SR1 & I2C_SR1_TXE) && --timeout){
     if (I2C3->SR1 & I2C_SR1_AF) goto nack_recovery;
-
+    }
     // 4. Send Data Value
     I2C3->DR = value;
     timeout = 10000;
-    while (!(I2C3->SR1 & I2C_SR1_BTF) && --timeout);
+    while (!(I2C3->SR1 & I2C_SR1_BTF) && --timeout){
 	if (timeout == 0U) goto timeout_recovery;
     if (I2C3->SR1 & I2C_SR1_AF) goto nack_recovery;
+    }
 
     // 5. Stop Condition
     I2C3->CR1 |= I2C_CR1_STOP;
