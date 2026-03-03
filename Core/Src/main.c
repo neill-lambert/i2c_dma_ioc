@@ -22,7 +22,6 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "stm32f429xx.h"
-#include "stm32f4xx_hal_dma.h"
 
 /* USER CODE END Includes */
 
@@ -73,7 +72,7 @@
 #define REG_IO_AF_TOUCH_IO_ALL	0xF0
 #define REG_TSC_CTRL_OP_MODE_Z_ONLY 	(0X01 << 3)
 
-#define I2CxTIMEOUT			10 //mS  //not using this right now???
+#define I2CxTIMEOUT			10 //mS
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -82,9 +81,6 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c3;
-DMA_HandleTypeDef hdma_i2c3_rx;
-DMA_HandleTypeDef hdma_i2c3_tx;
 
 /* USER CODE BEGIN PV */
 //touch info
@@ -122,6 +118,7 @@ void Touch_Process (void);
 static i2c_status_t  I2C_Wait_Addr_With_Timeout(void);
 void Touch_Interrupt_Init(void);
 void STMPE811_Init_Interrupts(void);
+static void my_SysTick_Init(void);
 void STMPE811_Emergency_Clear(void);
 /* USER CODE END PFP */
 
@@ -144,10 +141,8 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
 
   /* USER CODE BEGIN Init */
-  HAL_RCC_DeInit();
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -156,6 +151,7 @@ int main(void)
   /* USER CODE BEGIN SysInit */
   //look at the order of these...
   my_GPIO_Init();
+  my_SysTick_Init();  // Add this line
 
   if(!(GPIOC->IDR & GPIO_IDR_ID9)) //sda low if i2c3 locked
 	  	  	  ReleaseSerialBus();
@@ -201,72 +197,45 @@ int main(void)
   */
 void SystemClock_Config(void)
 {
-  // 1. Enable Power Controller Clock
-  RCC->APB1ENR |= RCC_APB1ENR_PWREN;
-  
-  // 2. Set voltage regulator to Scale 3 (lower power consumption)
-  // PWR->CR bits [15:14] = 01 for SCALE3
-  PWR->CR = (PWR->CR & ~(0x3UL << 14)) | (0x1UL << 14);
+	RCC->CR |= RCC_CR_HSEON;
+	while(!(RCC->CR & RCC_CR_HSERDY));
 
-  // 3. Configure RCC Oscillators
-  // Enable HSI (Internal oscillator) - it's typically on by default
-  RCC->CR |= RCC_CR_HSION;
-  // Wait for HSI to stabilize
-  while (!(RCC->CR & RCC_CR_HSIRDY));
+	//set flash prefetch and latency settings.
+	FLASH->ACR |= FLASH_ACR_ICEN | FLASH_ACR_DCEN | FLASH_ACR_PRFTEN | FLASH_ACR_LATENCY_15WS																																																														;
 
-  // 4. Configure PLL
-  // First, disable PLL before configuring it
-  RCC->CR &= ~RCC_CR_PLLON;
-  while (RCC->CR & RCC_CR_PLLON);  // Wait for PLL to turn off
+	//set timpre for a non zero ppre1 or ppre2 val. rm0090,p208
+	RCC->DCKCFGR |= RCC_DCKCFGR_TIMPRE;
 
-  // 5. Set Flash latency for the new clock frequency
-  // At 16 MHz HSI / 4 = 4 MHz, we need LATENCY_0
-  FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_2WS;
+	//configure prescalars HCLK, PCLK1, PCLK2,
+	//AHB prescalar.
+	RCC->CFGR |= RCC_CFGR_HPRE_DIV1;
+	//APB1 prescalar.
+	RCC->CFGR |= RCC_CFGR_PPRE1_DIV4;
+	//APB2 Prescalar
+	RCC->CFGR |= RCC_CFGR_PPRE2_DIV2;
 
-  // 6. Configure PLL for 64mhz:
-  // - Source: HSI (bit 22 = 0)
-  // - PLLM = 8   (bits 5:0)
-  // - PLLN = 64  (bits 14:6)
-  // - PLLP = 2   (bits 17:16 = 00 for /2)
-  // - PLLQ = 7   (bits 27:24)
-  RCC->PLLCFGR = (0 << 22)           // HSI as PLL source
-                | (8 << 0)            // PLLM = 8
-                | (64 << 6)           // PLLN = 64
-                | (0 << 16)           // PLLP = 2 (/2)
-                | (7 << 24);          // PLLQ = 7
+	//pll settings
+	RCC->PLLCFGR = (4 <<0) | (180 << 6) | (0 << 16) | (3 << 24) | (1 << 22);
 
-  // Enable PLL
-  RCC->CR |= RCC_CR_PLLON;
-  // Wait for PLL to lock
-  while (!(RCC->CR & RCC_CR_PLLRDY));
+	//enable pll and wait for ready
+	RCC->CR |= RCC_CR_PLLON;
+	while (!(RCC->CR & RCC_CR_PLLRDY));
 
-  // 5. Configure AHB, APB1, APB2 prescalers and switch to PLL
-  // AHB  divider: /4   (bits 7:4 = 0101)
-  // APB1 divider: /1   (bits 12:10 = 000)
-  // APB2 divider: /2   (bits 15:13 = 001)
-  RCC->CFGR = (0 << 4)           // AHB prescaler = /1
-            | (4 << 10)           // APB1 prescaler = /2
-            | (0 << 13)           // APB2 prescaler = /1
-            | (2 << 0);           // SYSCLK source = PLL (bits 1:0 = 10)
+	//select clock source
+	RCC->CFGR |= RCC_CFGR_SW_PLL;
+	while((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL);
 
-  // Wait for the clock switch to complete
-  while ((RCC->CFGR & RCC_CFGR_SWS) != (2 << 2));
+	//set pwr enable clock and voltage regulator
+	RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+	PWR->CR |= PWR_CR_VOS;
+
+	//enable clock access
+	//RCC_TypeDef *pRCC = (RCC_TypeDef *)RCC_BASE;
+	RCC->AHB1ENR |= RCC_AHB1ENR_GPIOGEN;
 }
 
 
 /* USER CODE BEGIN 4 */
-///**
-//  * @brief HAL_I2C_MasterTxCpltCallback
-//  * @param I2C_HandleTypeDef
-//  * @retval None
-//  */
-//void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c) {
-//    if(hi2c->Instance == I2C3) {
-//        // Handle successful reception
-//    	asm("nop");
-//    }
-//}
-
 
 /************************/
 /**
@@ -1023,6 +992,34 @@ void STMPE811_Emergency_Clear(void) {
     // Also, clear the STM32's EXTI pending bit one more time
     // to catch any "ghost" edges caused by the reset
     EXTI->PR = EXTI_PR_PR15;
+}
+
+/**
+  * @brief Initialize SysTick Timer for 1ms interrupts
+  * @param None
+  * @retval None
+  */
+static void my_SysTick_Init(void)
+{
+    // Calculate the reload value for 1ms tick at 180 MHz
+    // SysTick frequency = HCLK / 8 (or HCLK if configured otherwise)
+    // For 1ms: Reload = (180,000,000 / 8) / 1000 = 22,500
+    uint32_t reload_value = (180000000UL / 8UL) / 1000UL;  // 1ms tick
+    
+    // 1. Disable SysTick first
+    SysTick->CTRL = 0;
+    
+    // 2. Set reload register
+    SysTick->LOAD = reload_value - 1;  // LOAD is 0-indexed
+    
+    // 3. Clear current value
+    SysTick->VAL = 0;
+    
+    // 4. Configure and enable SysTick
+    // bit 2 = Clock Source (1 = AHB/8, 0 = AHB) 
+    // bit 1 = Interrupt enable
+    // bit 0 = Enable counter
+    SysTick->CTRL = (1 << 2) | (1 << 1) | (1 << 0);  // Use AHB/8 divider, enable interrupt, enable counter
 }
 
 static void delay_ms(uint32_t ms)

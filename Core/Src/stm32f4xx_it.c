@@ -20,9 +20,10 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f4xx_it.h"
+#include "stm32f429xx.h"
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "stm32f4xx_hal.h"
 
 /* USER CODE END Includes */
 
@@ -61,9 +62,7 @@ extern volatile uint32_t ul_g_ms_ticks;
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
-extern DMA_HandleTypeDef hdma_i2c3_rx;
-extern DMA_HandleTypeDef hdma_i2c3_tx;
-extern I2C_HandleTypeDef hi2c3;
+
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -192,7 +191,6 @@ void SysTick_Handler(void)
 {
   /* USER CODE BEGIN SysTick_IRQn 0 */
     ul_g_ms_ticks++;
-    HAL_IncTick();
   /* USER CODE END SysTick_IRQn 0 */
   /* USER CODE BEGIN SysTick_IRQn 1 */
 
@@ -220,29 +218,8 @@ void DMA1_Stream2_IRQHandler(void)
 	        I2C3->CR1 |= I2C_CR1_STOP;
 	        I2C3->CR2 &= ~I2C_CR2_DMAEN;    // Disable DMA requests
 	        DMA1_Stream2->CR &= ~DMA_SxCR_EN;    // Disable stream (optional but helps robustness)
-
-	  //       STMPE811_Write_Reg_Safe(0x0B, 0xFF);
-	  //       // 2. WAIT for the line to physically settle to HIGH
-			// // This is a few microseconds for the pull-up to fight the capacitance
-			// uint32_t timeout = 2000;
-			// while(!(GPIOA->IDR & (1 << 15)) && --timeout);
-	  //
-	  //       STMPE811_Write_Reg_Safe(0x4B, 0x01); //reset fifo
-	  //       STMPE811_Read_Reg_Simple(0x4C); //read fifo to check empty
-	  //       STMPE811_Write_Reg_Safe(0x4B, 0x00); // fifo Normal Mode
-	  //
-			// // 3. CRITICAL: Clear STM32 Pending bit AGAIN
-			// // This clears any edge that occurred while we were busy
-			// EXTI->PR = EXTI_PR_PR15;
-			// // 4. Re-enable the NVIC interrupt just in case
-			// NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
-			// NVIC_EnableIRQ(EXTI15_10_IRQn);
-
 	        g_I2C_TransferComplete = 1;     // SIGNAL MAIN THREAD
-
-	        // 5. Force the sensor to re-evaluate the interrupt line
-	        STMPE811_Write_Reg_Safe(0x09, 0x01); // Re-enable Global Interrupts (INT_CTRL)
-
+	        STMPE811_Write_Reg_Safe(0x09, 0x01); // Re-enable Global Interrupts (INT_CTRL) force the sensor to re-evaluate the interrupt line
 			}
 	if((DMA1->LISR)&DMA_LISR_HTIF2)
 			{
@@ -256,7 +233,6 @@ void DMA1_Stream2_IRQHandler(void)
 			DMA1->LIFCR=DMA_LIFCR_CTEIF2;
 			}
   /* USER CODE END DMA1_Stream2_IRQn 0 */
-  //HAL_DMA_IRQHandler(&hdma_i2c3_rx);
   /* USER CODE BEGIN DMA1_Stream2_IRQn 1 */
 
   /* USER CODE END DMA1_Stream2_IRQn 1 */
@@ -270,8 +246,6 @@ void DMA1_Stream4_IRQHandler(void)
   /* USER CODE BEGIN DMA1_Stream4_IRQn 0 */
 	if((DMA1->HISR)&DMA_HISR_TCIF4)
 			{
-			//log_debug("I2C finished transmiting using DMA1_Stream6");
-			//finished=1;
 			I2C3->CR1 &= ~I2C_CR1_ACK;	//ack disable before unsetting addr
 			I2C3->CR1 |= I2C_CR1_STOP;
 			DMA1->HIFCR=DMA_HIFCR_CTCIF4;
@@ -279,18 +253,15 @@ void DMA1_Stream4_IRQHandler(void)
 			}
 	if((DMA1->HISR)&DMA_HISR_HTIF4)
 			{
-			//log_debug("DMA1 stream6 half transfer interrupt");
 			DMA1->HIFCR=DMA_HIFCR_CHTIF4;
 			}
 
 	if((DMA1->HISR)&DMA_HISR_TEIF4)
 			{
-			//log_debug("DMA1 stream6 error");
 			DMA1->HIFCR=DMA_HIFCR_CTEIF4;
 			}
 
   /* USER CODE END DMA1_Stream4_IRQn 0 */
-  //HAL_DMA_IRQHandler(&hdma_i2c3_tx);
   /* USER CODE BEGIN DMA1_Stream4_IRQn 1 */
 
   /* USER CODE END DMA1_Stream4_IRQn 1 */
@@ -304,7 +275,6 @@ void I2C3_EV_IRQHandler(void)
   /* USER CODE BEGIN I2C3_EV_IRQn 0 */
 
   /* USER CODE END I2C3_EV_IRQn 0 */
-  HAL_I2C_EV_IRQHandler(&hi2c3);
   /* USER CODE BEGIN I2C3_EV_IRQn 1 */
 
   /* USER CODE END I2C3_EV_IRQn 1 */
@@ -318,7 +288,6 @@ void I2C3_ER_IRQHandler(void)
   /* USER CODE BEGIN I2C3_ER_IRQn 0 */
 
   /* USER CODE END I2C3_ER_IRQn 0 */
-  HAL_I2C_ER_IRQHandler(&hi2c3);
   /* USER CODE BEGIN I2C3_ER_IRQn 1 */
 
   /* USER CODE END I2C3_ER_IRQn 1 */
